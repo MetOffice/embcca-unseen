@@ -1,0 +1,30 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+
+# Conda
+.conda/
+
+# Editor / IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+
+# Outputs (figures)
+outputs/
+Plots/
+**/Plots/
+
+# Data
+Data/
+**/*.nc
+
+# Logs
+*.log

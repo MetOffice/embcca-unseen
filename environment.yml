@@ -1,0 +1,25 @@
+
+name: embcca-unseen
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12.10
+  - numpy
+  - scipy
+  - matplotlib
+  - seaborn
+  - scikit-learn
+  - netcdf4
+  - cftime
+  - pandas
+  - cartopy
+  - shapely
+  - pyproj
+  - geos
+  - proj
+  - scitools-iris
+  - eigen          
+  - pybind11       
+  - pip
+  - pip:
+      - SBCK==1.4.2
