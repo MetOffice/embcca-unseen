@@ -1,3 +1,7 @@
+# (C) Crown Copyright, Met Office. All rights reserved.
+# This file is released under the BSD 3-Clause license.
+# See LICENCE.txt in the root of the repository for full licensing details.
+
 import netCDF4 as nc
 import numpy as np
 import seaborn as sns
