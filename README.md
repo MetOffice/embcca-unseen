@@ -1,3 +1,6 @@
+(C) Crown Copyright, Met Office. All rights reserved.
+See LICENCE.txt in the root of the repository for full licensing details.
+
 # EMBCCA‑UNSEEN: multivariate bias correction for UNSEEN compound extremes
 
 This repository contains the analysis code used in the manuscript:
