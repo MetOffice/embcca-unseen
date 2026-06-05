@@ -5,7 +5,7 @@ See LICENCE.txt in the root of the repository for full licensing details.
 
 This repository contains the analysis code used in the manuscript:
 
-> \*A new fast multivariate bias correction technique: a case study for compound events in Hunan Province, China, using the UNSEEN approach\*
+> *A new fast multivariate bias correction technique: a case study for compound events in Hunan Province, China, using the UNSEEN approach*
 
 The code applies the **EMBCCA‑UNSEEN** bias correction method to DePreSys4 initialised hindcasts, using ERA5‑Land as the observational reference, and evaluates fidelity using:
 
@@ -16,13 +16,13 @@ The code applies the **EMBCCA‑UNSEEN** bias correction method to DePreSys4 ini
 
 ## Repository structure
 
-* `Multi-DePreSys4-Paper-area\_avg\_final\_multiscatter.py`  
+* `Multi-DePreSys4-Paper-area_avg_final_multiscatter.py`  
 → Hunan Province (area-mean) analysis  
 → Reproduces main manuscript figures
-* `Multi-DePreSys4-Paper-area\_full\_final\_China.py`  
+* `Multi-DePreSys4-Paper-area_full_final_China.py`  
 → China-wide spatial analysis  
-→ Produces correlation maps and timing comparisons
-* `fidelity\_test\_cube.py`  
+→ Produces correlation maps and comparison of time taken for the different multivariate methods when applied China-wide
+* `fidelity_test_cube.py`  
 → Helper module for UNSEEN-style fidelity testing
 
 \---
@@ -37,7 +37,7 @@ conda activate embcca-unseen
 Tested with:
 
 * Python 3.12.10
-* SBCK 1.4.2
+* SBCK 1.4.2 (https://github.com/yrobink/SBCK-python)
 
 \---
 
@@ -55,7 +55,7 @@ Each script contains:
 
 You must edit:
 
-* `DATA\_DIR`
+* `DATA_DIR`
 * `OUTDIR`
 
 \---
@@ -63,7 +63,7 @@ You must edit:
 ### 1\. Hunan case study (main results)
 
 ```bash
-python Multi-DePreSys4-Paper-area\_avg\_final\_multiscatter.py
+python Multi-DePreSys4-Paper-area_avg_final_multiscatter.py
 ```
 
 Produces:
@@ -72,7 +72,7 @@ Produces:
 * Scatter plots comparing joint distributions across methods
 * Statistical fidelity plots
 * SVM ROC curves
-* Extreme-event probabilities
+* Extreme event probabilities
 
 Outputs saved in:
 
@@ -82,26 +82,26 @@ OUTDIR/
 
 subfolders:
 
-* `Line\_plots/`
-* `Scatter\_plots/`
-* `Statistical\_Comparison/`
-* `SVM\_Comparison/`
-* `Exceedance\_Comparison/`
-* `Fidelity\_Testing/`
+* `Line_plots`
+* `Scatter_plots`
+* `Statistical_Comparison`
+* `SVM_Comparison`
+* `Exceedance_Comparison`
+* `Fidelity_Testing/`
 
 \---
 
 ### 2\. China spatial analysis
 
 ```bash
-python Multi-DePreSys4-Paper-area\_full\_final\_China.py
+python Multi-DePreSys4-Paper-area_full_final_China.py
 ```
 
 Produces:
 
 * Spatial correlation maps
 * Correlation anomaly maps
-* Timing comparisons
+* Calculation of time taken for each multivariate bias adjustment method to be applied across China
 
 Outputs saved in:
 
@@ -119,32 +119,32 @@ This table helps reproduce key figures from the paper.
 
 |Manuscript Figure|Description|Script output|
 |-|-|-|
-|Figure 3|Univariate fidelity (temperature mean shift)|`Fidelity\_Testing/\*temperature.png`|
-|Figure 4|Six-panel temperature–precip scatter|`Scatter\_plots/Scatter\_sixpanel.png`|
-|Figure 5a|China correlation maps|China script (`plot\_corr\_map`)|
-|Figure 5b|Correlation anomaly maps|China script (`plot\_corr\_diff\_map`)|
-|Figure 6|Correlation fidelity distributions|`Statistical\_Comparison/Correlation.png`|
-|Figure 7|SVM ROC curves|`SVM\_Comparison/SVM\_ROC\_sixpanel.png`|
-|Figure 8 (left)|Dry / hot probabilities|`Exceedance\_Comparison/exceedance\_comparison\_bar.png`|
-|Figure 8 (right)|Joint probability|`Exceedance\_Comparison/joint\_exceedance\_comparison\_bar.png`|
+|Figure 3|Univariate fidelity (temperature mean shift)|`Fidelity_Testing/Original model data_temperature.png` and `Fidelity_Testing/Univariate mean shift_temperature.png`|
+|Figure 4|Six-panel temperature–precip scatter|`Scatter_plots/Scatter_sixpanel.png`|
+|Figure 5a|China correlation maps|`China/maps/correlation'.png`|
+|Figure 5b|Correlation anomaly maps|`China/maps/correlation_diff'.png`|
+|Figure 6|Correlation fidelity distributions|`Statistical_Comparison/Correlation.png`|
+|Figure 7|SVM ROC curves|`SVM_Comparison/SVM_ROC_sixpanel.png`|
+|Figure 8 (left)|Dry / hot probabilities|`Exceedance_Comparison/exceedance_comparison_bar.png`|
+|Figure 8 (right)|Joint probability|`Exceedance_Comparison/joint_exceedance_comparison_bar.png`|
 |Figure 9|Threshold sensitivity plots||
-|→ precip decrement||`Exceedance\_Comparison/joint\_exceedance\_by\_precipitation\_decrement.png`|
-|→ temperature increment||`Exceedance\_Comparison/joint\_exceedance\_by\_temperature\_increment.png`|
+|→ precip decrement||`Exceedance_Comparison/joint_exceedance_by_precipitation_decrement.png`|
+|→ temperature increment||`Exceedance_Comparison/joint_exceedance_by_temperature_increment.png`|
 
 ### Appendix B figures (SFC testing)
 
 |Appendix Figure|Description|Script output|
 |-|-|-|
-|Figures 10–11|Mean distributions|`Statistical\_Comparison/\*Mean\*.png`|
-|Figures 12–13|Standard deviation|`Statistical\_Comparison/\*Standard\_Deviation\*.png`|
-|Figure 14|Skewness|`Statistical\_Comparison/Skewness.png`|
-|Figure 15|Kurtosis|`Statistical\_Comparison/Kurtosis.png`|
+|Figures 10–11|Mean distributions|`Statistical_Comparison/*_Mean.png` where * = temperature or precipitation
+|Figures 12–13|Standard deviation|`Statistical_Comparison/*_Standard_Deviation.png` where * = temperature or precipitation
+|Figure 14|Skewness|`Statistical_Comparison/Skewness.png`|
+|Figure 15|Kurtosis|`Statistical_Comparison/Kurtosis.png`|
 
 \---
 
 ## Data requirements
 
-This repository does **not** include data.
+This repository does **not** include data. Data can be provided on request in .nc format.
 
 You need:
 
@@ -162,8 +162,8 @@ You need:
 
 |Variable|Name|
 |-|-|
-|Model temperature|`mean\_jja\_temperature`|
-|Model precipitation|`total\_jja\_precipitation`|
+|Model temperature|`mean_jja_temperature`|
+|Model precipitation|`total_jja_precipitation`|
 |Obs temperature|`t2m`|
 |Obs precipitation|`tp`|
 
@@ -171,10 +171,7 @@ You need:
 
 ## Reproducibility
 
-* Seed controlled via `SEED`
-* Bootstrapping reproducible
-* SVM reproducible
-* Ensemble splitting reproducible
+* Seeds are used for bootstrapping during SFC testing, during SVM resampling, and when splitting the data into training and testing, so that results are reproducible.
 
 Analysis period:
 
@@ -189,14 +186,8 @@ Analysis period:
 The scripts use:
 
 ```python
-MPL\_BACKEND = "Agg"
+MPL_BACKEND = "Agg"
 ```
-
-This ensures compatibility with:
-
-* HPC systems
-* batch jobs
-* headless environments
 
 Switch to `"Qt5Agg"` only for interactive use.
 
@@ -214,12 +205,11 @@ Switch to `"Qt5Agg"` only for interactive use.
 Please cite:
 
 * The associated manuscript
-* This repository (`CITATION.cff`)
 
 \---
 
 ## Notes
 
 * SBCK methods included: **dOTC, MRec, R2D2**
-* EMBCCA‑UNSEEN preserves variance (critical for UNSEEN)
+* Unlike these methods, EMBCCA‑UNSEEN preserves variance (critical for UNSEEN applications)
 
