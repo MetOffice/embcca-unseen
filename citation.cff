@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+title: EMBCCA-UNSEEN
+version: 1.0.0
+authors:
+  - family-names: Yang
+    given-names: Yiwei
+  - family-names: Bacon
+    given-names: James
+  - family-names: Ji
+    given-names: Lanpeng
+  - family-names: Ben Rached
+    given-names: Nadhir
+  - family-names: Bradshaw
+    given-names: Catherine D.
+  - family-names: Davie
+    given-names: Jemma C.S.
+    - family-names: Crocker
+    given-names: Thomas
+date-released: 2026
+license: BSD-3-Clause
+repository-code: https://github.com/MetOffice/embcca-unseen
