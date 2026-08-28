@@ -4,7 +4,7 @@
 This script:
 1. Loads model and observation data with Iris cubes.
 2. Applies unit normalization (Kelvin/Celsius for temperature fields).
-3. Transfers the model valid-cell mask to observations.
+3. Applies mode-specific regional checks/masking for observations.
 4. Builds annual observation series (single file or monthly directory input).
 5. Aligns model and observations on common years and runs fidelity testing.
 """
@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import csv
 import re
+from collections import defaultdict
 from pathlib import Path
 
 import iris
@@ -27,6 +28,7 @@ from fidelity_test_cube import FidelityTestCube
 
 
 MONTHLY_FILE_RE = re.compile(r"(?P<year>\d{4})(?P<month>\d{2})(?:\D|$)")
+INIT_FILE_RE = re.compile(r"^s(?P<year>\d{4})")
 CELSIUS_UNITS = {"c", "degc", "degree_celsius", "degrees_celsius", "celsius"}
 KELVIN_UNITS = {"k", "kelvin"}
 LAT_NAMES = ("latitude", "lat")
@@ -125,11 +127,6 @@ def _slice_dim(cube: iris.cube.Cube, dim_index: int, index: int) -> iris.cube.Cu
     return cube[tuple(slicer)]
 
 
-def _build_nearest_indices(source_coords: np.ndarray, target_coords: np.ndarray) -> np.ndarray:
-    """Map each target coordinate to the nearest source-grid index."""
-    return np.array([int(np.argmin(np.abs(source_coords - value))) for value in target_coords], dtype=int)
-
-
 def _resolve_leadtime_indices(cube: iris.cube.Cube, single_leadtime_index: int | None) -> list[int]:
     """Return leadtime indices to use.
 
@@ -176,6 +173,14 @@ def _extract_model_spatial_info(
     treated as invalid, which captures shapefile-masked regions in this dataset.
     """
     cube = _load_variable_cube(model_path, variable_name)
+    return _extract_model_spatial_info_from_cube(cube, leadtime_indices)
+
+
+def _extract_model_spatial_info_from_cube(
+    cube: iris.cube.Cube,
+    leadtime_indices: list[int],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[float, float, float, float]]:
+    """Get model lat/lon arrays, extent, and persistent valid-cell mask from a loaded cube."""
     _debug_cube(cube, "_extract_model_spatial_info: raw model cube")
     lead_coord = _find_coord(cube, ("leadtime",))
     lead_dim = cube.coord_dims(lead_coord)[0]
@@ -211,6 +216,431 @@ def _extract_model_spatial_info(
     return model_lats, model_lons, valid_mask, extent
 
 
+def _extent_from_mask(
+    model_lats: np.ndarray,
+    model_lons: np.ndarray,
+    valid_mask: np.ndarray,
+) -> tuple[float, float, float, float]:
+    """Return spatial extent from a 2D validity mask on the model grid."""
+    if not np.any(valid_mask):
+        raise ValueError("Region mask removed all model grid cells")
+    lat_used = np.where(np.any(valid_mask, axis=1))[0]
+    lon_used = np.where(np.any(valid_mask, axis=0))[0]
+    return (
+        float(np.nanmin(model_lats[lat_used])),
+        float(np.nanmax(model_lats[lat_used])),
+        float(np.nanmin(model_lons[lon_used])),
+        float(np.nanmax(model_lons[lon_used])),
+    )
+
+
+def _extent_within(
+    inner: tuple[float, float, float, float],
+    outer: tuple[float, float, float, float],
+    tol: float = 1e-8,
+) -> bool:
+    """Return True when inner extent is fully contained within outer extent."""
+    return (
+        inner[0] >= outer[0] - tol
+        and inner[1] <= outer[1] + tol
+        and inner[2] >= outer[2] - tol
+        and inner[3] <= outer[3] + tol
+    )
+
+
+def _cube_valid_extent(cube: iris.cube.Cube) -> tuple[float, float, float, float]:
+    """Return extent of spatial cells that contain at least one finite value."""
+    lat_coord = _find_coord(cube, LAT_NAMES)
+    lon_coord = _find_coord(cube, LON_NAMES)
+    lat_dim = cube.coord_dims(lat_coord)[0]
+    lon_dim = cube.coord_dims(lon_coord)[0]
+
+    lats = np.asarray(lat_coord.points, dtype=float)
+    lons = np.asarray(lon_coord.points, dtype=float)
+    data = _as_float_array(cube.data)
+
+    other_dims = tuple(i for i in range(data.ndim) if i not in (lat_dim, lon_dim))
+    if other_dims:
+        valid_mask = np.any(np.isfinite(data), axis=other_dims)
+    else:
+        valid_mask = np.isfinite(data)
+
+    if valid_mask.shape != (lats.size, lons.size):
+        raise ValueError(
+            f"Could not construct spatial validity mask from cube with shape {cube.shape}. "
+            f"Expected mask shape {(lats.size, lons.size)}, got {valid_mask.shape}."
+        )
+
+    return _extent_from_mask(lats, lons, valid_mask)
+
+
+def _assert_obs_is_prebounded(obs_cube: iris.cube.Cube, model_extent: tuple[float, float, float, float], obs_label: str) -> None:
+    """Fail if supplied observation data are not already bounded/masked to model domain."""
+    obs_extent = _cube_valid_extent(obs_cube)
+    if not _extent_within(obs_extent, model_extent):
+        raise ValueError(
+            "Supplied observation file is not already bounded/masked to the model domain. "
+            f"Obs valid extent={obs_extent}, model extent={model_extent}. "
+            "Provide a pre-bounded observation file or use --obs-dir with --region-shapefile."
+        )
+    _debug(f"_assert_obs_is_prebounded: {obs_label} valid extent={obs_extent} within model extent={model_extent}")
+
+
+def _build_obs_region_mask(
+    cube: iris.cube.Cube,
+    region_bbox: tuple[float, float, float, float] | None,
+    region_shape,
+    required_coverage_extent: tuple[float, float, float, float] | None,
+) -> np.ndarray | None:
+    """Build a reusable 2D region mask on an observation cube grid.
+
+    Returns None when no regional masking is requested.
+    """
+    lat_coord = _find_coord(cube, LAT_NAMES)
+    lon_coord = _find_coord(cube, LON_NAMES)
+    obs_lats = np.asarray(lat_coord.points, dtype=float)
+    obs_lons = np.asarray(lon_coord.points, dtype=float)
+
+    def half_cell_tol(points: np.ndarray) -> float:
+        if points.size < 2:
+            return 1e-8
+        diffs = np.abs(np.diff(np.sort(points)))
+        diffs = diffs[np.isfinite(diffs) & (diffs > 0)]
+        if diffs.size == 0:
+            return 1e-8
+        return float(0.5 * np.nanmedian(diffs))
+
+    if required_coverage_extent is not None:
+        lat_tol = half_cell_tol(obs_lats)
+        lon_tol = half_cell_tol(obs_lons)
+        if np.nanmin(obs_lats) > required_coverage_extent[0] + lat_tol or np.nanmax(obs_lats) < required_coverage_extent[1] - lat_tol:
+            raise ValueError("Observation latitude coverage does not include required regional extent")
+        if np.nanmin(obs_lons) > required_coverage_extent[2] + lon_tol or np.nanmax(obs_lons) < required_coverage_extent[3] - lon_tol:
+            raise ValueError("Observation longitude coverage does not include required regional extent")
+
+    if region_bbox is None and region_shape is None:
+        return None
+
+    obs_mask = np.ones((obs_lats.size, obs_lons.size), dtype=bool)
+    if region_bbox is not None:
+        obs_mask &= _mask_from_bbox(obs_lats, obs_lons, region_bbox)
+    if region_shape is not None:
+        obs_mask &= _mask_from_shape(cube, region_shape)
+
+    if not np.any(obs_mask):
+        raise ValueError("Observation region mask removed all cells")
+
+    return obs_mask
+
+
+def _subset_year_range(
+    years: np.ndarray,
+    data: np.ndarray,
+    start_year: int | None,
+    end_year: int | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Subset a year-indexed array to an inclusive [start_year, end_year] range."""
+    years = np.asarray(years, dtype=int)
+    keep = np.ones(years.shape, dtype=bool)
+    if start_year is not None:
+        keep &= years >= int(start_year)
+    if end_year is not None:
+        keep &= years <= int(end_year)
+    return years[keep], np.asarray(data)[keep]
+
+
+def _parse_init_year_from_filename(model_file: Path) -> int | None:
+    """Extract init year from raw model filename like s1960.nc."""
+    match = INIT_FILE_RE.search(model_file.stem)
+    if match is None:
+        return None
+    return int(match.group("year"))
+
+
+def _region_shape_bounds(region_shape) -> tuple[float, float, float, float]:
+    """Return (lat_min, lat_max, lon_min, lon_max) bounds from a shape."""
+
+    def unpack_bounds(bounds):
+        if bounds is None:
+            return None
+        if callable(bounds):
+            bounds = bounds()
+        values = np.asarray(bounds).squeeze()
+        if values.size != 4:
+            return None
+        min_lon, min_lat, max_lon, max_lat = [float(v) for v in values]
+        return float(min_lat), float(max_lat), float(min_lon), float(max_lon)
+
+    for candidate in [
+        getattr(region_shape, "total_bounds", None),
+        getattr(region_shape, "bounds", None),
+        getattr(getattr(region_shape, "data", None), "bounds", None),
+        getattr(getattr(region_shape, "geometry", None), "bounds", None),
+    ]:
+        result = unpack_bounds(candidate)
+        if result is not None:
+            return result
+
+    raise ValueError("Unable to infer bounds from region shapefile geometry")
+
+
+def _intersect_bboxes(
+    bbox_a: tuple[float, float, float, float],
+    bbox_b: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
+    """Return intersection of two bboxes (lat_min, lat_max, lon_min, lon_max)."""
+    lat_min = max(bbox_a[0], bbox_b[0])
+    lat_max = min(bbox_a[1], bbox_b[1])
+    lon_min = max(bbox_a[2], bbox_b[2])
+    lon_max = min(bbox_a[3], bbox_b[3])
+    if lat_min > lat_max or lon_min > lon_max:
+        raise ValueError("Requested regional bounds do not overlap")
+    return (lat_min, lat_max, lon_min, lon_max)
+
+
+def _subset_cube_to_bbox(
+    cube: iris.cube.Cube,
+    bbox: tuple[float, float, float, float],
+) -> iris.cube.Cube:
+    """Subset a cube spatially to an inclusive lat/lon bbox."""
+    lat_min, lat_max, lon_min, lon_max = bbox
+    lat_coord = _find_coord(cube, LAT_NAMES)
+    lon_coord = _find_coord(cube, LON_NAMES)
+    lat_name = lat_coord.name()
+    lon_name = lon_coord.name()
+
+    lat_constraint = iris.Constraint(**{lat_name: lambda cell: lat_min <= cell <= lat_max})
+    lon_constraint = iris.Constraint(**{lon_name: lambda cell: lon_min <= cell <= lon_max})
+    sub = cube.extract(lat_constraint & lon_constraint)
+    if sub is None:
+        raise ValueError(f"Spatial subset removed all cells for bbox {bbox}")
+    return sub
+
+
+def _mask_from_bbox(model_lats: np.ndarray, model_lons: np.ndarray, bbox: tuple[float, float, float, float]) -> np.ndarray:
+    """Create a 2D mask from an inclusive lat/lon bounding box."""
+    lat_min, lat_max, lon_min, lon_max = bbox
+    if lat_min > lat_max or lon_min > lon_max:
+        raise ValueError("Bounding box must be provided as lat_min lat_max lon_min lon_max")
+
+    lat_keep = (model_lats >= lat_min) & (model_lats <= lat_max)
+    lon_keep = (model_lons >= lon_min) & (model_lons <= lon_max)
+    return np.outer(lat_keep, lon_keep)
+
+
+def _load_region_shape(shapefile_path: Path):
+    """Load and merge all geometries from a shapefile into one Ascend shape."""
+    try:
+        from ascend import shape as ashape
+    except Exception as exc:
+        raise ImportError("Shapefile masking requires the Ascend package") from exc
+
+    shapes = ashape.load_shp(str(shapefile_path))
+    if len(shapes) == 0:
+        raise ValueError(f"No geometries found in shapefile: {shapefile_path}")
+
+    merged = shapes[0]
+    for shp in shapes[1:]:
+        merged = merged.union(shp)
+
+    return merged
+
+
+def _mask_from_shape(cube: iris.cube.Cube, region_shape) -> np.ndarray:
+    """Create a 2D boolean mask from an Ascend shape on a cube grid."""
+    weights_cube = region_shape.cube_2d_weights(cube, intersection=True)
+    weights = _as_float_array(weights_cube.data)
+    return weights > 0
+
+
+def _extract_raw_model_spatial_info(
+    sample_model_file: Path,
+    variable_name: str,
+    region_bbox: tuple[float, float, float, float] | None,
+    region_shape,
+    spatial_clip_bbox: tuple[float, float, float, float] | None = None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, tuple[float, float, float, float]]:
+    """Get model lat/lon arrays and valid mask for raw DePreSys4 init-year files."""
+    cube = _load_variable_cube(sample_model_file, variable_name)
+    if spatial_clip_bbox is not None:
+        cube = _subset_cube_to_bbox(cube, spatial_clip_bbox)
+    _debug_cube(cube, "_extract_raw_model_spatial_info: sample raw model cube")
+
+    lat_coord = _find_coord(cube, LAT_NAMES)
+    lon_coord = _find_coord(cube, LON_NAMES)
+    model_lats = np.asarray(lat_coord.points, dtype=float)
+    model_lons = np.asarray(lon_coord.points, dtype=float)
+
+    valid_mask = np.ones((model_lats.size, model_lons.size), dtype=bool)
+    if region_bbox is not None:
+        valid_mask &= _mask_from_bbox(model_lats, model_lons, region_bbox)
+    if region_shape is not None:
+        valid_mask &= _mask_from_shape(cube, region_shape)
+
+    extent = _extent_from_mask(model_lats, model_lons, valid_mask)
+    _debug(
+        f"_extract_raw_model_spatial_info: valid_mask shape={valid_mask.shape}, "
+        f"valid cells={int(np.sum(valid_mask))}/{valid_mask.size}, extent={extent}"
+    )
+    return model_lats, model_lons, valid_mask, extent
+
+
+def _load_model_series_from_raw_directory(
+    model_dir: Path,
+    variable_name: str,
+    obs_months: tuple[int, ...] | None,
+    model_valid_mask: np.ndarray,
+    start_year: int | None,
+    end_year: int | None,
+    spatial_clip_bbox: tuple[float, float, float, float] | None = None,
+    pattern: str = "s*.nc",
+) -> tuple[np.ndarray, np.ndarray, str | None, int, int]:
+    """Load raw init-year model files and aggregate to yearly pooled simulations.
+
+    Returns:
+      years_kept: 1D array of target calendar years.
+      model_data: 2D array [year, pooled_simulation].
+      model_units: canonical units string.
+      pooled_rows: number of pooled (init-file, target-year) rows before collapse.
+      full_pool_size: number of simulations retained for each kept year.
+    """
+    files = sorted(model_dir.glob(pattern))
+    if not files:
+        raise FileNotFoundError(f"No model files found in {model_dir} matching {pattern!r}")
+
+    # Filter init files up front using requested target years and the file's lead-year span.
+    # This avoids loading many raw init files that cannot contribute to [start_year, end_year].
+    if start_year is not None or end_year is not None:
+        sample_cube = _load_variable_cube(files[0], variable_name)
+        time_coord = _find_coord(sample_cube, ("time",))
+        sample_times = time_coord.units.num2date(time_coord.points)
+        sample_years = np.array([int(dt.year) for dt in sample_times], dtype=int)
+
+        sample_init_year = _parse_init_year_from_filename(files[0])
+        if sample_init_year is not None:
+            lead_offsets = sample_years - sample_init_year
+            min_offset = int(np.min(lead_offsets))
+            max_offset = int(np.max(lead_offsets))
+
+            min_init_needed = None if end_year is None else int(end_year) - min_offset
+            max_init_needed = None if start_year is None else int(start_year) - max_offset
+
+            filtered_files = []
+            for model_file in files:
+                init_year = _parse_init_year_from_filename(model_file)
+                if init_year is None:
+                    filtered_files.append(model_file)
+                    continue
+                if max_init_needed is not None and init_year < max_init_needed:
+                    continue
+                if min_init_needed is not None and init_year > min_init_needed:
+                    continue
+                filtered_files.append(model_file)
+
+            _debug(
+                "_load_model_series_from_raw_directory: "
+                f"prefiltered raw model files {len(files)} -> {len(filtered_files)} "
+                f"using offsets [{min_offset}, {max_offset}] and target years "
+                f"[{start_year}, {end_year}]"
+            )
+            files = filtered_files
+
+    if not files:
+        raise ValueError(
+            "No raw model files remain after filtering by requested start/end years"
+        )
+
+    month_filter = set(obs_months) if obs_months else None
+    pooled_by_year: dict[int, list[float]] = defaultdict(list)
+    pooled_rows = 0
+    model_units: str | None = None
+
+    for model_file in files:
+        cube = _load_variable_cube(model_file, variable_name)
+        if spatial_clip_bbox is not None:
+            cube = _subset_cube_to_bbox(cube, spatial_clip_bbox)
+        source_units = _canonical_unit_name(str(cube.units))
+        if model_units is None:
+            if source_units in CELSIUS_UNITS or source_units in KELVIN_UNITS:
+                model_units = "celsius"
+            else:
+                model_units = source_units
+
+        time_coord = _find_coord(cube, ("time",))
+        real_coord = _find_coord(cube, ("realisation", "realization", "realization_number", "realization"))
+        lat_coord = _find_coord(cube, LAT_NAMES)
+        lon_coord = _find_coord(cube, LON_NAMES)
+
+        time_dim = cube.coord_dims(time_coord)[0]
+        real_dim = cube.coord_dims(real_coord)[0]
+        lat_dim = cube.coord_dims(lat_coord)[0]
+        lon_dim = cube.coord_dims(lon_coord)[0]
+
+        data = _as_float_array(cube.data)
+        data = _convert_temperature_units(data, str(cube.units), model_units)
+        data = np.moveaxis(data, (real_dim, time_dim, lat_dim, lon_dim), (0, 1, 2, 3))
+        data = np.where(model_valid_mask[None, None, :, :], data, np.nan)
+        data = np.nanmean(data, axis=(2, 3))
+
+        datetimes = time_coord.units.num2date(time_coord.points)
+        years = np.array([int(dt.year) for dt in datetimes], dtype=int)
+        months = np.array([int(dt.month) for dt in datetimes], dtype=int)
+
+        target_years = np.unique(years)
+        for year in target_years:
+            if start_year is not None and year < start_year:
+                continue
+            if end_year is not None and year > end_year:
+                continue
+
+            time_idx = np.where(years == year)[0]
+            if month_filter is not None:
+                present = set(int(m) for m in months[time_idx])
+                if not month_filter.issubset(present):
+                    continue
+                time_idx = np.array([idx for idx in time_idx if int(months[idx]) in month_filter], dtype=int)
+
+            if time_idx.size == 0:
+                continue
+
+            values = np.nanmean(data[:, time_idx], axis=1)
+            values = values[np.isfinite(values)]
+            if values.size == 0:
+                continue
+
+            pooled_by_year[int(year)].extend(values.tolist())
+            pooled_rows += 1
+
+    if not pooled_by_year:
+        raise ValueError("No model yearly values were produced from raw model files")
+
+    years_sorted = np.array(sorted(pooled_by_year), dtype=int)
+    pool_sizes = np.array([len(pooled_by_year[int(y)]) for y in years_sorted], dtype=int)
+    full_pool_size = int(pool_sizes.max())
+    keep = pool_sizes == full_pool_size
+
+    dropped = years_sorted[~keep]
+    if dropped.size:
+        if dropped.size <= 8:
+            dropped_text = ", ".join(str(int(y)) for y in dropped)
+        else:
+            dropped_text = (
+                ", ".join(str(int(y)) for y in dropped[:4])
+                + ", ..., "
+                + ", ".join(str(int(y)) for y in dropped[-4:])
+            )
+        print(
+            f"Dropping {dropped.size} model years without full simulation coverage "
+            f"({full_pool_size} simulations/year required): {dropped_text}"
+        )
+
+    years_kept = years_sorted[keep]
+    model_data = np.vstack([np.asarray(pooled_by_year[int(y)], dtype=float) for y in years_kept])
+    _debug_array("_load_model_series_from_raw_directory: years_kept", years_kept)
+    _debug_array("_load_model_series_from_raw_directory: model_data", model_data)
+    return years_kept, model_data, model_units, pooled_rows, full_pool_size
+
+
 def _load_model_series(
     model_path: Path,
     variable_name: str,
@@ -219,12 +649,27 @@ def _load_model_series(
 ) -> tuple[np.ndarray, np.ndarray, str | None]:
     """Load model data as (simulated_year_row, member) across selected leadtimes."""
     cube = _load_variable_cube(model_path, variable_name)
+    return _load_model_series_from_cube(cube, leadtime_indices, model_valid_mask, source_label=str(model_path))
+
+
+def _load_model_series_from_cube(
+    cube: iris.cube.Cube,
+    leadtime_indices: list[int],
+    model_valid_mask: np.ndarray,
+    source_label: str = "model cube",
+) -> tuple[np.ndarray, np.ndarray, str | None]:
+    """Load model data as (simulated_year_row, member) across selected leadtimes from loaded cube."""
     _debug_cube(cube, "_load_model_series: raw model cube")
-    model_units = _canonical_unit_name(str(cube.units))
+    source_units = _canonical_unit_name(str(cube.units))
+    if source_units in CELSIUS_UNITS or source_units in KELVIN_UNITS:
+        model_units = "celsius"
+    else:
+        model_units = source_units
 
     lead_coord = _find_coord(cube, ("leadtime",))
     lead_dim = cube.coord_dims(lead_coord)[0]
     data = _as_float_array(cube.data)
+    data = _convert_temperature_units(data, str(cube.units), model_units)
     data = np.take(data, leadtime_indices, axis=lead_dim)
     _debug_array("_load_model_series: data after leadtime selection", data)
 
@@ -251,7 +696,7 @@ def _load_model_series(
     try:
         year_coord = cube.coord("year")
     except Exception as exc:
-        raise KeyError(f"Model file {model_path} does not contain a usable year coordinate") from exc
+        raise KeyError(f"Model file {source_label} does not contain a usable year coordinate") from exc
 
     # Reconstruct the (init_year, leadtime, member) structure explicitly
     # so each leadtime contributes additional simulated years.
@@ -392,36 +837,28 @@ def _collapse_pooled_years_to_unique(
 def _obs_field_to_masked_mean(
     cube: iris.cube.Cube,
     target_units: str | None,
-    model_lats: np.ndarray,
-    model_lons: np.ndarray,
-    model_valid_mask: np.ndarray,
-    model_extent: tuple[float, float, float, float],
+    obs_region_mask: np.ndarray | None,
 ) -> float:
-    """Map an observation field onto model grid, apply model mask, and area-average."""
+    """Apply precomputed regional mask on obs grid and area-average."""
     data = _as_float_array(cube.data)
     data = _convert_temperature_units(data, str(cube.units), target_units)
 
+    if obs_region_mask is None:
+        return float(np.nanmean(data))
+
     lat_coord = _find_coord(cube, LAT_NAMES)
     lon_coord = _find_coord(cube, LON_NAMES)
-    lat_dim = cube.coord_dims(lat_coord)[0]
-    lon_dim = cube.coord_dims(lon_coord)[0]
+    expected_shape = (len(lat_coord.points), len(lon_coord.points))
+    if obs_region_mask.shape != expected_shape:
+        raise ValueError(
+            f"Observation region mask shape {obs_region_mask.shape} does not match cube grid {expected_shape}"
+        )
 
-    obs_lats = np.asarray(lat_coord.points, dtype=float)
-    obs_lons = np.asarray(lon_coord.points, dtype=float)
-
-    # Coverage check before nearest-grid remapping.
-    if np.nanmin(obs_lats) > model_extent[0] or np.nanmax(obs_lats) < model_extent[1]:
-        raise ValueError("Observation latitude coverage does not include the full model extent")
-    if np.nanmin(obs_lons) > model_extent[2] or np.nanmax(obs_lons) < model_extent[3]:
-        raise ValueError("Observation longitude coverage does not include the full model extent")
-
-    lat_idx = _build_nearest_indices(obs_lats, model_lats)
-    lon_idx = _build_nearest_indices(obs_lons, model_lons)
-    data = np.take(data, lat_idx, axis=lat_dim)
-    data = np.take(data, lon_idx, axis=lon_dim)
-
-    # Apply same valid-cell mask used for model averaging.
-    data = np.where(model_valid_mask, data, np.nan)
+    expanded_mask = obs_region_mask
+    while expanded_mask.ndim < data.ndim:
+        expanded_mask = np.expand_dims(expanded_mask, axis=0)
+    expanded_mask = np.broadcast_to(expanded_mask, data.shape)
+    data = np.where(expanded_mask, data, np.nan)
     return float(np.nanmean(data))
 
 
@@ -429,19 +866,25 @@ def _load_observation_series(
     obs_path: Path,
     variable_name: str,
     obs_months: tuple[int, ...] | None,
+    start_year: int | None,
+    end_year: int | None,
     target_units: str | None,
-    model_extent: tuple[float, float, float, float],
-    model_lats: np.ndarray,
-    model_lons: np.ndarray,
-    model_valid_mask: np.ndarray,
+    region_bbox: tuple[float, float, float, float] | None,
+    region_shape,
+    required_coverage_extent: tuple[float, float, float, float] | None,
+    preloaded_cube: iris.cube.Cube | None = None,
+    spatial_clip_bbox: tuple[float, float, float, float] | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load one observation file and build yearly series.
 
     If the file has a time coordinate, selected months are grouped to yearly means.
     If the file has a year coordinate, values are used directly.
     """
-    cube = _load_variable_cube(obs_path, variable_name)
+    cube = preloaded_cube if preloaded_cube is not None else _load_variable_cube(obs_path, variable_name)
+    if spatial_clip_bbox is not None:
+        cube = _subset_cube_to_bbox(cube, spatial_clip_bbox)
     _debug_cube(cube, "_load_observation_series: raw obs cube")
+    obs_region_mask = _build_obs_region_mask(cube, region_bbox, region_shape, required_coverage_extent)
 
     try:
         year_coord = cube.coord("year")
@@ -452,17 +895,28 @@ def _load_observation_series(
         if years.ndim == 1 and years.size > 1:
             year_dim = cube.coord_dims(year_coord)[0]
             for i in range(years.size):
+                year_i = int(years[i])
+                if start_year is not None and year_i < start_year:
+                    continue
+                if end_year is not None and year_i > end_year:
+                    continue
                 sub_cube = _slice_dim(cube, year_dim, i)
                 values.append(
                     _obs_field_to_masked_mean(
-                        sub_cube, target_units, model_lats, model_lons, model_valid_mask, model_extent
+                        sub_cube, target_units, obs_region_mask
                     )
                 )
+            years = np.array(
+                [int(y) for y in years if (start_year is None or int(y) >= start_year) and (end_year is None or int(y) <= end_year)],
+                dtype=int,
+            )
         else:
             year_value = int(np.asarray(years).reshape(-1)[0])
+            if (start_year is not None and year_value < start_year) or (end_year is not None and year_value > end_year):
+                return np.array([], dtype=int), np.array([], dtype=float)
             values.append(
                 _obs_field_to_masked_mean(
-                    cube, target_units, model_lats, model_lons, model_valid_mask, model_extent
+                    cube, target_units, obs_region_mask
                 )
             )
             years = np.array([year_value], dtype=int)
@@ -487,8 +941,10 @@ def _load_observation_series(
             month = int(match.group("month"))
             if obs_months and month not in set(obs_months):
                 return np.array([], dtype=int), np.array([], dtype=float)
+            if (start_year is not None and year < start_year) or (end_year is not None and year > end_year):
+                return np.array([], dtype=int), np.array([], dtype=float)
             value = _obs_field_to_masked_mean(
-                cube, target_units, model_lats, model_lons, model_valid_mask, model_extent
+                cube, target_units, obs_region_mask
             )
             return np.array([year], dtype=int), np.array([value], dtype=float)
 
@@ -500,11 +956,15 @@ def _load_observation_series(
 
     time_dim = cube.coord_dims(time_coord)[0]
     for i, dt in enumerate(datetimes):
+        if start_year is not None and int(dt.year) < start_year:
+            continue
+        if end_year is not None and int(dt.year) > end_year:
+            continue
         if month_filter is not None and int(dt.month) not in month_filter:
             continue
         sub_cube = _slice_dim(cube, time_dim, i)
         value = _obs_field_to_masked_mean(
-            sub_cube, target_units, model_lats, model_lons, model_valid_mask, model_extent
+            sub_cube, target_units, obs_region_mask
         )
         grouped.setdefault(int(dt.year), []).append(value)
         months_seen.setdefault(int(dt.year), set()).add(int(dt.month))
@@ -527,11 +987,13 @@ def _load_observation_directory(
     obs_dir: Path,
     variable_name: str,
     obs_months: tuple[int, ...] | None,
+    start_year: int | None,
+    end_year: int | None,
     target_units: str | None,
-    model_extent: tuple[float, float, float, float],
-    model_lats: np.ndarray,
-    model_lons: np.ndarray,
-    model_valid_mask: np.ndarray,
+    region_bbox: tuple[float, float, float, float] | None,
+    region_shape,
+    required_coverage_extent: tuple[float, float, float, float] | None,
+    spatial_clip_bbox: tuple[float, float, float, float] | None = None,
     pattern: str = "*.nc",
 ) -> tuple[np.ndarray, np.ndarray]:
     """Load one-file-per-month observations and aggregate to annual means."""
@@ -539,13 +1001,9 @@ def _load_observation_directory(
     if not files:
         raise FileNotFoundError(f"No observation files found in {obs_dir} matching {pattern!r}")
     _debug(f"_load_observation_directory: found {len(files)} files matching {pattern!r}")
-    if _DEBUG:
-        _debug_cube(_load_variable_cube(files[0], variable_name), f"_load_observation_directory: first file cube ({files[0].name})")
 
     month_filter = set(obs_months) if obs_months else None
-    grouped: dict[int, list[float]] = {}
-    months_seen: dict[int, set[int]] = {}
-
+    selected: list[tuple[Path, int, int]] = []
     for obs_file in files:
         match = MONTHLY_FILE_RE.search(obs_file.stem)
         if match is None:
@@ -557,15 +1015,36 @@ def _load_observation_directory(
         month = int(match.group("month"))
         if month_filter is not None and month not in month_filter:
             continue
+        if start_year is not None and year < start_year:
+            continue
+        if end_year is not None and year > end_year:
+            continue
+        selected.append((obs_file, year, month))
 
-        cube = _load_variable_cube(obs_file, variable_name)
+    if not selected:
+        raise ValueError(
+            f"No observation files in {obs_dir} matched requested years/months "
+            f"(start_year={start_year}, end_year={end_year}, obs_months={obs_months})"
+        )
+
+    _debug(f"_load_observation_directory: selected {len(selected)} files after year/month filtering")
+    first_cube = _load_variable_cube(selected[0][0], variable_name)
+    if spatial_clip_bbox is not None:
+        first_cube = _subset_cube_to_bbox(first_cube, spatial_clip_bbox)
+    if _DEBUG:
+        _debug_cube(first_cube, f"_load_observation_directory: first file cube ({selected[0][0].name})")
+    obs_region_mask = _build_obs_region_mask(first_cube, region_bbox, region_shape, required_coverage_extent)
+    grouped: dict[int, list[float]] = {}
+    months_seen: dict[int, set[int]] = {}
+
+    for i, (obs_file, year, month) in enumerate(selected):
+        cube = first_cube if i == 0 else _load_variable_cube(obs_file, variable_name)
+        if i > 0 and spatial_clip_bbox is not None:
+            cube = _subset_cube_to_bbox(cube, spatial_clip_bbox)
         value = _obs_field_to_masked_mean(
             cube,
             target_units,
-            model_lats,
-            model_lons,
-            model_valid_mask,
-            model_extent,
+            obs_region_mask,
         )
         grouped.setdefault(year, []).append(value)
         months_seen.setdefault(year, set()).add(month)
@@ -645,6 +1124,44 @@ def _write_prepared_observations(output_path: Path, years: np.ndarray, values: n
             writer.writerow([int(year), float(value)])
 
 
+def _write_prepared_model_csv(output_path: Path, years: np.ndarray, values_2d: np.ndarray) -> None:
+    """Write prepared model yearly matrix to CSV (year + simulation columns)."""
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    n_members = values_2d.shape[1]
+    header = ["year"] + [f"sim_{i+1}" for i in range(n_members)]
+    with output_path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(header)
+        for year, row in zip(years, values_2d):
+            writer.writerow([int(year), *[float(v) for v in row]])
+
+
+def _write_prepared_observations_netcdf(output_path: Path, years: np.ndarray, values: np.ndarray, var_name: str) -> None:
+    """Write prepared annual observation series to NetCDF using Iris."""
+    year_coord = iris.coords.DimCoord(np.asarray(years, dtype=int), long_name="year", units="1")
+    cube = iris.cube.Cube(np.asarray(values, dtype=float), long_name=var_name, dim_coords_and_dims=[(year_coord, 0)])
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    iris.save(cube, str(output_path))
+
+
+def _write_prepared_model_netcdf(
+    output_path: Path,
+    years: np.ndarray,
+    values_2d: np.ndarray,
+    var_name: str,
+) -> None:
+    """Write prepared annual model matrix to NetCDF using Iris."""
+    year_coord = iris.coords.DimCoord(np.asarray(years, dtype=int), long_name="year", units="1")
+    member_coord = iris.coords.DimCoord(np.arange(values_2d.shape[1], dtype=int), long_name="simulation", units="1")
+    cube = iris.cube.Cube(
+        np.asarray(values_2d, dtype=float),
+        long_name=var_name,
+        dim_coords_and_dims=[(year_coord, 0), (member_coord, 1)],
+    )
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    iris.save(cube, str(output_path))
+
+
 def _overall_distribution_stats(values: np.ndarray) -> dict[str, float]:
     """Return summary statistics from all finite values in an array."""
     flat = np.asarray(values, dtype=float).ravel()
@@ -681,19 +1198,42 @@ def _obs_dataset_label(obs_file: Path | None, obs_dir: Path | None) -> str:
 def build_parser() -> argparse.ArgumentParser:
     """Create CLI parser."""
     parser = argparse.ArgumentParser(description="Run fidelity testing for one variable")
-    parser.add_argument("--model-file", type=Path, required=True, help="Path to model netCDF file")
+    model_input = parser.add_mutually_exclusive_group(required=False)
+    model_input.add_argument("--model-file", type=Path, help="Path to prepared model netCDF file")
+    model_input.add_argument("--model-dir", type=Path, help="Directory of raw model init files (e.g. .../DePreSys4/monthly/air_temperature)")
+    parser.add_argument("--model-root", type=Path, default=None, help="Optional model root directory (e.g. /data/users/appldata/Data/DePreSys4)")
+    parser.add_argument("--model-subdir", default=None, help="Model subdirectory under model root (e.g. monthly/air_temperature)")
+    parser.add_argument("--model-pattern", default="s*.nc", help="Glob pattern for raw model files")
     parser.add_argument("--model-var", default="mean_jja_temperature", help="Model variable name")
 
-    obs_input = parser.add_mutually_exclusive_group(required=True)
+    obs_input = parser.add_mutually_exclusive_group(required=False)
     obs_input.add_argument("--obs-file", type=Path, help="Single observation netCDF file")
     obs_input.add_argument("--obs-dir", type=Path, help="Directory of monthly observation netCDF files")
+    parser.add_argument("--obs-root", type=Path, default=None, help="Optional obs root directory (e.g. /data/users/appldata/Data/OBS-ERA5)")
+    parser.add_argument("--obs-subdir", default=None, help="Obs subdirectory under obs root (e.g. monthly/2m_temperature)")
 
     parser.add_argument("--obs-var", default="t2m", help="Observation variable name")
+    parser.add_argument("--start-year", type=int, default=None, help="Inclusive start year for both model and observations")
+    parser.add_argument("--end-year", type=int, default=None, help="Inclusive end year for both model and observations")
+    parser.add_argument(
+        "--region-bbox",
+        type=float,
+        nargs=4,
+        default=None,
+        metavar=("LAT_MIN", "LAT_MAX", "LON_MIN", "LON_MAX"),
+        help="Regional bounding box",
+    )
+    parser.add_argument(
+        "--region-shapefile",
+        type=Path,
+        default=None,
+        help="Shapefile path for regional masking",
+    )
     parser.add_argument(
         "--leadtime-index",
         type=int,
         default=None,
-        help="Optional single leadtime index. If omitted, all valid leadtimes are used.",
+        help="Optional single leadtime index (prepared model-file mode only)",
     )
     parser.add_argument(
         "--obs-months",
@@ -707,6 +1247,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--label", default="temperature", help="Output filename label")
     parser.add_argument("--obs-pattern", default="*.nc", help="Glob pattern for monthly obs files")
     parser.add_argument("--save-prepared-obs", type=Path, default=None, help="Optional CSV output path")
+    parser.add_argument("--save-prepared-model", type=Path, default=None, help="Optional CSV output path for model yearly matrix")
+    parser.add_argument("--save-prepared-obs-nc", type=Path, default=None, help="Optional NetCDF output path for prepared observations")
+    parser.add_argument("--save-prepared-model-nc", type=Path, default=None, help="Optional NetCDF output path for prepared model")
     parser.add_argument(
         "--debug",
         action="store_true",
@@ -719,51 +1262,163 @@ def main() -> None:
     """Execute end-to-end one-variable fidelity workflow."""
     args = build_parser().parse_args()
     _set_debug(args.debug)
+
+    if args.model_dir is None and args.model_file is None:
+        if args.model_root is not None and args.model_subdir:
+            args.model_dir = args.model_root / args.model_subdir
+        else:
+            raise ValueError("Provide either --model-file, --model-dir, or (--model-root and --model-subdir)")
+
+    if args.obs_dir is None and args.obs_file is None:
+        if args.obs_root is not None and args.obs_subdir:
+            args.obs_dir = args.obs_root / args.obs_subdir
+        else:
+            raise ValueError("Provide either --obs-file, --obs-dir, or (--obs-root and --obs-subdir)")
+
     obs_dataset = _obs_dataset_label(args.obs_file, args.obs_dir)
-
-    model_cube = _load_variable_cube(args.model_file, args.model_var)
-    leadtime_indices = _resolve_leadtime_indices(model_cube, args.leadtime_index)
-
-    # Derive model grid and mask once, then reuse for both model and observations.
-    model_lats, model_lons, model_valid_mask, model_extent = _extract_model_spatial_info(
-        args.model_file,
-        args.model_var,
-        leadtime_indices,
-    )
-
-    model_years, model_data, model_units = _load_model_series(
-        args.model_file,
-        args.model_var,
-        leadtime_indices,
-        model_valid_mask,
-    )
-    pooled_rows = model_data.shape[0]
-    model_years, model_data = _collapse_pooled_years_to_unique(model_years, model_data)
-
     obs_months = tuple(args.obs_months) if args.obs_months else None
+    region_bbox = tuple(args.region_bbox) if args.region_bbox is not None else None
+    region_shape = _load_region_shape(args.region_shapefile) if args.region_shapefile is not None else None
+    obs_required_coverage_extent: tuple[float, float, float, float] | None = None
+    obs_region_bbox: tuple[float, float, float, float] | None = None
+    obs_region_shape = None
+    obs_spatial_clip_bbox: tuple[float, float, float, float] | None = None
+
+    if args.model_file is not None:
+        model_mode = "prepared-model-file"
+        model_cube = _load_variable_cube(args.model_file, args.model_var)
+        leadtime_indices = _resolve_leadtime_indices(model_cube, args.leadtime_index)
+
+        # Derive model grid and mask once, then reuse for both model and observations.
+        model_lats, model_lons, model_valid_mask, model_extent = _extract_model_spatial_info_from_cube(
+            model_cube,
+            leadtime_indices,
+        )
+        model_extent = _extent_from_mask(model_lats, model_lons, model_valid_mask)
+        model_is_pre_masked = not np.all(model_valid_mask)
+
+        # In supplied model-file mode, the model is treated as already bounded/masked.
+        # Observation handling depends on source:
+        # - supplied obs file: verify already bounded/masked (no remasking).
+        # - obs directory: apply supplied region mask, and if model is not masked,
+        #   additionally bound obs by model lat/lon extent.
+        if args.obs_file is not None:
+            obs_region_bbox = None
+            obs_region_shape = None
+            obs_required_coverage_extent = None
+            obs_spatial_clip_bbox = None
+        else:
+            if args.region_shapefile is None:
+                raise ValueError(
+                    "When using --model-file with --obs-dir, supply --region-shapefile "
+                    "used for observation masking."
+                )
+            obs_region_bbox = region_bbox
+            obs_region_shape = region_shape
+            if not model_is_pre_masked:
+                obs_region_bbox = model_extent if obs_region_bbox is None else (
+                    max(obs_region_bbox[0], model_extent[0]),
+                    min(obs_region_bbox[1], model_extent[1]),
+                    max(obs_region_bbox[2], model_extent[2]),
+                    min(obs_region_bbox[3], model_extent[3]),
+                )
+                if obs_region_bbox[0] > obs_region_bbox[1] or obs_region_bbox[2] > obs_region_bbox[3]:
+                    raise ValueError("Requested observation region does not overlap model extent")
+            obs_required_coverage_extent = model_extent
+            obs_spatial_clip_bbox = model_extent
+
+        # Recompute model yearly series using the final region mask.
+        model_years, model_data, model_units = _load_model_series_from_cube(
+            model_cube,
+            leadtime_indices,
+            model_valid_mask,
+            source_label=str(args.model_file),
+        )
+        pooled_rows = model_data.shape[0]
+        model_years, model_data = _collapse_pooled_years_to_unique(model_years, model_data)
+        leadtime_summary = f"{len(leadtime_indices)} ({leadtime_indices[0]} to {leadtime_indices[-1]})"
+    else:
+        model_mode = "raw-model-directory"
+        model_files = sorted(args.model_dir.glob(args.model_pattern))
+        if not model_files:
+            raise FileNotFoundError(f"No model files found in {args.model_dir} matching {args.model_pattern!r}")
+
+        if region_bbox is None and region_shape is None:
+            raise ValueError(
+                "A regional constraint is required in raw model-directory mode. "
+                "Provide either --region-bbox or --region-shapefile."
+            )
+
+        raw_clip_bbox = region_bbox
+        if region_shape is not None:
+            shape_bbox = _region_shape_bounds(region_shape)
+            raw_clip_bbox = shape_bbox if raw_clip_bbox is None else _intersect_bboxes(raw_clip_bbox, shape_bbox)
+
+        model_lats, model_lons, model_valid_mask, model_extent = _extract_raw_model_spatial_info(
+            model_files[0],
+            args.model_var,
+            region_bbox,
+            region_shape,
+            spatial_clip_bbox=raw_clip_bbox,
+        )
+        model_years, model_data, model_units, pooled_rows, full_pool_size = _load_model_series_from_raw_directory(
+            args.model_dir,
+            args.model_var,
+            obs_months,
+            model_valid_mask,
+            args.start_year,
+            args.end_year,
+            spatial_clip_bbox=raw_clip_bbox,
+            pattern=args.model_pattern,
+        )
+        leadtime_summary = f"n/a (raw mode, pooled simulations per year={full_pool_size})"
+        obs_region_bbox = region_bbox
+        obs_region_shape = region_shape
+        # Obs are pre-clipped to model extent in raw mode; an additional strict
+        # extent coverage gate can fail spuriously due grid-edge differences.
+        obs_required_coverage_extent = None
+        obs_spatial_clip_bbox = model_extent
+
+    model_years, model_data = _subset_year_range(model_years, model_data, args.start_year, args.end_year)
+    if model_years.size == 0:
+        raise ValueError("No model years remain after applying year range filters")
+
     if args.obs_file is not None:
+        obs_preloaded_cube = None
+        if args.model_file is not None:
+            obs_preloaded_cube = _load_variable_cube(args.obs_file, args.obs_var)
+            _assert_obs_is_prebounded(obs_preloaded_cube, model_extent, str(args.obs_file))
         obs_years, obs_data = _load_observation_series(
             args.obs_file,
             args.obs_var,
             obs_months,
+            args.start_year,
+            args.end_year,
             model_units,
-            model_extent,
-            model_lats,
-            model_lons,
-            model_valid_mask,
+            obs_region_bbox,
+            obs_region_shape,
+            obs_required_coverage_extent,
+            preloaded_cube=obs_preloaded_cube,
+            spatial_clip_bbox=obs_spatial_clip_bbox,
         )
     else:
         obs_years, obs_data = _load_observation_directory(
             args.obs_dir,
             args.obs_var,
             obs_months,
+            args.start_year,
+            args.end_year,
             model_units,
-            model_extent,
-            model_lats,
-            model_lons,
-            model_valid_mask,
+            obs_region_bbox,
+            obs_region_shape,
+            obs_required_coverage_extent,
+            spatial_clip_bbox=obs_spatial_clip_bbox,
             pattern=args.obs_pattern,
         )
+
+    obs_years, obs_data = _subset_year_range(obs_years, obs_data, args.start_year, args.end_year)
+    if obs_years.size == 0:
+        raise ValueError("No observation years remain after applying year range filters")
 
     common_years, model_aligned, obs_aligned = _align_on_years(model_years, model_data, obs_years, obs_data)
     model_dist_stats = _overall_distribution_stats(model_aligned)
@@ -771,17 +1426,24 @@ def main() -> None:
 
     if args.save_prepared_obs is not None:
         _write_prepared_observations(args.save_prepared_obs, common_years, obs_aligned)
+    if args.save_prepared_model is not None:
+        _write_prepared_model_csv(args.save_prepared_model, common_years, model_aligned)
+    if args.save_prepared_obs_nc is not None:
+        _write_prepared_observations_netcdf(args.save_prepared_obs_nc, common_years, obs_aligned, args.obs_var)
+    if args.save_prepared_model_nc is not None:
+        _write_prepared_model_netcdf(args.save_prepared_model_nc, common_years, model_aligned, args.model_var)
 
     outdir = args.outdir
     outdir.mkdir(parents=True, exist_ok=True)
     fidelity_dir = outdir / "Fidelity_Testing"
     fidelity_dir.mkdir(parents=True, exist_ok=True)
 
+    print(f"Model source mode: {model_mode}")
     print(f"Model rows: {model_aligned.shape[0]}, model members: {model_aligned.shape[1]}")
-    print(f"Leadtimes used: {len(leadtime_indices)} ({leadtime_indices[0]} to {leadtime_indices[-1]})")
+    print(f"Leadtimes used: {leadtime_summary}")
     print(f"Observation dataset: {obs_dataset}")
     print(
-        f"Leadtime pooling: {pooled_rows} pooled (init x leadtime) rows collapsed to "
+        f"Leadtime pooling: {pooled_rows} pooled model-year contributions collapsed to "
         f"{model_aligned.shape[0]} unique calendar years with full simulation coverage "
         f"({model_aligned.shape[1]} simulations per year)"
     )
@@ -822,48 +1484,90 @@ def main() -> None:
     stats_measures = ftc.timeseries_fid_test(obs_aligned, model_aligned, seed=args.seed)
 
     output_png = fidelity_dir / f"{args.label}_fidelity.png"
-    ftc.plot_fidelity_testing(obs_aligned, model_aligned, stats_measures, 0.1, "", str(output_png))
+    if args.region_shapefile is not None:
+        region_label = args.region_shapefile.stem
+    elif args.region_bbox is not None:
+        region_label = "region-bbox"
+    else:
+        region_label = "region-unknown"
+    plot_title = f"{region_label} | Obs: {obs_dataset} | Variable: {args.obs_var}"
+    with mpl.rc_context(
+        {
+            "font.size": 12,
+            "axes.titlesize": 13,
+            "axes.labelsize": 12,
+            "xtick.labelsize": 11,
+            "ytick.labelsize": 11,
+            "legend.fontsize": 13,
+        }
+    ):
+        ftc.plot_fidelity_testing(obs_aligned, model_aligned, stats_measures, 0.1, plot_title, str(output_png))
 
     # Add run metadata directly to the figure so the context is preserved with the plot.
-    metadata_text = "\n".join(
-        [
-            f"Leadtimes used: {len(leadtime_indices)} ({leadtime_indices[0]} to {leadtime_indices[-1]})",
-            f"Obs dataset: {obs_dataset}",
-            f"Pooled rows collapsed to unique years: {pooled_rows} -> {model_aligned.shape[0]}",
-            f"Model ensembles: {model_aligned.shape[1]}",
-            (
-                "Total simulated model years: "
-                f"{model_aligned.shape[0] * model_aligned.shape[1]} "
-                f"({model_aligned.shape[0]} x {model_aligned.shape[1]} simulations)"
-            ),
-            (
-                "Model dist: "
-                f"mean={model_dist_stats['mean']:.2f}, std={model_dist_stats['std']:.2f}, "
-                f"p05={model_dist_stats['p05']:.2f}, p95={model_dist_stats['p95']:.2f}"
-            ),
-            (
-                "Obs dist: "
-                f"mean={obs_dist_stats['mean']:.2f}, std={obs_dist_stats['std']:.2f}, "
-                f"p05={obs_dist_stats['p05']:.2f}, p95={obs_dist_stats['p95']:.2f}"
-            ),
-            (
-                f"Common years: {unique_common_years[0]} to {unique_common_years[-1]} "
-                f"({unique_common_years.size} unique)"
-            ),
-            f"Model valid cells: {int(np.sum(model_valid_mask))} / {model_valid_mask.size}",
-        ]
-    )
-    plt.figtext(
-        0.02,
-        0.98,
-        metadata_text,
+    metadata_lines = [
+        f"Model source: {model_mode}",
+        f"Leadtimes used: {leadtime_summary}",
+        f"Obs dataset: {obs_dataset}",
+        f"Obs variable: {args.obs_var}",
+        f"Analysis months: {', '.join(str(month) for month in obs_months) if obs_months else 'all months'}",
+        f"Region: {region_label}",
+        f"Pooled rows collapsed to unique years: {pooled_rows} -> {model_aligned.shape[0]}",
+        f"Model ensembles: {model_aligned.shape[1]}",
+        (
+            "Total simulated model years: "
+            f"{model_aligned.shape[0] * model_aligned.shape[1]} "
+            f"({model_aligned.shape[0]} x {model_aligned.shape[1]} simulations)"
+        ),
+        (
+            "Model dist: "
+            f"mean={model_dist_stats['mean']:.2f}, std={model_dist_stats['std']:.2f}, "
+            f"p05={model_dist_stats['p05']:.2f}, p95={model_dist_stats['p95']:.2f}"
+        ),
+        (
+            "Obs dist: "
+            f"mean={obs_dist_stats['mean']:.2f}, std={obs_dist_stats['std']:.2f}, "
+            f"p05={obs_dist_stats['p05']:.2f}, p95={obs_dist_stats['p95']:.2f}"
+        ),
+        (
+            f"Common years: {unique_common_years[0]} to {unique_common_years[-1]} "
+            f"({unique_common_years.size} unique)"
+        ),
+        f"Model valid cells: {int(np.sum(model_valid_mask))} / {model_valid_mask.size}",
+    ]
+    split_index = (len(metadata_lines) + 1) // 2
+    left_text = "\n".join(metadata_lines[:split_index])
+    right_text = "\n".join(metadata_lines[split_index:])
+    fig = plt.gcf()
+    # Make the output figure larger and reserve a dedicated metadata panel below
+    # the plotting axes so labels and diagnostics never overlap.
+    fig.set_size_inches(14, 9)
+    fig.subplots_adjust(bottom=0.33)
+    metadata_ax = fig.add_axes([0.05, 0.05, 0.90, 0.22])
+    metadata_ax.axis("off")
+    metadata_ax.text(
+        0.0,
+        1.0,
+        left_text,
         ha="left",
         va="top",
+        transform=metadata_ax.transAxes,
         fontsize=9,
+        linespacing=1.25,
+        bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "0.7"},
+    )
+    metadata_ax.text(
+        0.52,
+        1.0,
+        right_text,
+        ha="left",
+        va="top",
+        transform=metadata_ax.transAxes,
+        fontsize=9,
+        linespacing=1.25,
         bbox={"facecolor": "white", "alpha": 0.8, "edgecolor": "0.7"},
     )
 
-    plt.savefig(output_png, dpi=200, bbox_inches="tight")
+    plt.savefig(output_png, dpi=200, bbox_inches="tight", pad_inches=0.08)
     plt.close()
     print(f"Saved {output_png}")
 
