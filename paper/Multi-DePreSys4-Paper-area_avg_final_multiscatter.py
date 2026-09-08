@@ -371,7 +371,7 @@ def plot_scatter_sixpanel(obs_combined, mod_raw, meancor_combined,
     plt.close()
 
 
-## Bias Correction: EMBCCA ##
+## Bias Correction: Yiweh's method ##
 # correct mean and correlation, preserve the variance
 mod_corrected_eigen = correct(mod_raw, obs_combined)
 

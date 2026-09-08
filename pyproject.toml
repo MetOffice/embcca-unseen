@@ -39,9 +39,6 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Atmospheric Science",
 ]
 
-# The method itself is pure NumPy. Keeping this list at one entry is what makes
-# the package installable with pip on any platform, with no compiler and no
-# system libraries. Anything heavier belongs in an optional extra below.
 dependencies = [
     "numpy>=1.24",
 ]
