@@ -10,7 +10,10 @@ channels:
 dependencies:
   - python=3.12.10
   - numpy=2.5.3
-  - scipy=1.18.0
+  # Must stay below 1.18. scipy 1.18 changed stats.rankdata to return float64
+  # for every method; SBCK 1.4.2 uses that result directly as an array index,
+  # so MRec and R2D2 both raise IndexError on scipy >= 1.18. dOTC is unaffected.
+  - scipy=1.17.1
   - matplotlib=3.10.9
   - seaborn=0.13.2
   - scikit-learn=1.9.0
