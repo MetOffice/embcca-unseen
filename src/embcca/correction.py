@@ -109,7 +109,7 @@ def _align(mod_st, mod_eigenvalues, mod_eigenvectors, obs_eigenvalues, obs_eigen
     return aligned @ obs_eigenvectors.T
 
 
-def correct_area_mean(mod, obs):
+def correct_area_mean(mod: np.ndarray, obs: np.ndarray) -> np.ndarray:
     """Apply EMBCCA to area-mean (non-spatial) data.
 
     Parameters
@@ -147,7 +147,8 @@ def correct_area_mean(mod, obs):
     return mod_corrected
 
 
-def correct_gridded(mod, obs, eps=1e-6):
+
+def correct_gridded(mod: np.ndarray, obs: np.ndarray, eps=1e-6) -> np.ndarray:
     """Apply EMBCCA to gridded data, independently at each grid cell.
 
     Parameters
@@ -189,7 +190,8 @@ def correct_gridded(mod, obs, eps=1e-6):
     return mod_corrected
 
 
-def correct(mod, obs, **kwargs):
+
+def correct(mod: np.ndarray, obs: np.ndarray, **kwargs) -> np.ndarray:
     """Apply EMBCCA, dispatching on the layout of ``mod``.
 
     Parameters
