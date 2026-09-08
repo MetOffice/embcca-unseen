@@ -22,6 +22,11 @@ Those analyses apply the **EMBCCA‑UNSEEN** bias correction method to DePreSys4
 * `src/embcca/`  
 → The EMBCCA bias-adjustment method, as an installable Python package  
 → Depends only on NumPy
+* `examples/`  
+→ Worked example applying the package to the sample data in `example-data/`  
+→ Needs only the package itself
+* `example-data/`  
+→ Small 2x2 grid cut from the China domain, stored ready to use
 * `paper/`  
 → The manuscript analyses, with their own README covering the extra dependencies they need
 * `paper/Multi-DePreSys4-Paper-area_avg_final_multiscatter.py`  
@@ -50,6 +55,14 @@ The bias-adjustment method needs only NumPy and installs with pip on any platfor
 ```bash
 pip install -e .
 ```
+
+To see it applied to the sample data in `example-data/`:
+
+```bash
+python examples/example.py
+```
+
+That script corrects a small 2x2 grid in both the gridded and the area-mean form, and reports the mean, correlation and variance before and after. See `example-data/README.md` for the array layouts it expects.
 
 ### The manuscript analyses
 
