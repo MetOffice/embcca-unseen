@@ -3,11 +3,14 @@ See LICENCE.txt in the root of the repository for full licensing details.
 
 # EMBCCA‑UNSEEN: multivariate bias correction for UNSEEN compound extremes
 
-This repository contains the analysis code used in the manuscript:
+This repository contains two things:
+
+* **`embcca`**, an installable Python package providing the EMBCCA‑UNSEEN multivariate bias correction method. It depends only on NumPy and can be applied to your own data.
+* The analyses that produced the results in the manuscript:
 
 > *A new fast multivariate bias correction technique: a case study for compound events in Hunan Province, China, using the UNSEEN approach*
 
-The code applies the **EMBCCA‑UNSEEN** bias correction method to DePreSys4 initialised hindcasts, using ERA5‑Land as the observational reference, and evaluates fidelity using:
+Those analyses apply the **EMBCCA‑UNSEEN** bias correction method to DePreSys4 initialised hindcasts, using ERA5‑Land as the observational reference, and evaluate fidelity using:
 
 * Multivariate statistical feature consistency (SFC) testing
 * Support Vector Machine (SVM)-based separability testing
@@ -16,23 +19,49 @@ The code applies the **EMBCCA‑UNSEEN** bias correction method to DePreSys4 ini
 
 ## Repository structure
 
-* `Multi-DePreSys4-Paper-area_avg_final_multiscatter.py`  
+* `src/embcca/`  
+→ The EMBCCA bias-adjustment method, as an installable Python package  
+→ Depends only on NumPy
+* `paper/`  
+→ The manuscript analyses, with their own README covering the extra dependencies they need
+* `paper/Multi-DePreSys4-Paper-area_avg_final_multiscatter.py`  
 → Hunan Province (area-mean) analysis  
 → Reproduces main manuscript figures
-* `Multi-DePreSys4-Paper-area_full_final_China.py`  
+* `paper/Multi-DePreSys4-Paper-area_full_final_China.py`  
 → China-wide spatial analysis  
 → Produces correlation maps and comparison of time taken for the different multivariate methods when applied China-wide
-* `fidelity_test_cube.py`  
+* `paper/fidelity_test_cube.py`  
 → Helper module for UNSEEN-style fidelity testing
+* `tests/`  
+→ Test suite for the package
+* `pyproject.toml`  
+→ Package definition
+* `environment.yml`  
+→ Conda environment for the `paper/` analyses
 
 \---
 
-## Installation (conda)
+## Installation
+
+### The package
+
+The bias-adjustment method needs only NumPy and installs with pip on any platform:
+
+```bash
+pip install -e .
+```
+
+### The manuscript analyses
+
+The analyses in `paper/` need considerably more. Due to the SBCK dependency, use the conda environment for those:
 
 ```bash
 conda env create -f environment.yml
 conda activate embcca-unseen
+pip install -e .
 ```
+
+See `paper/README.md` for what the analyses require and how to run them.
 
 Tested with:
 
@@ -63,6 +92,7 @@ You must edit:
 ### 1\. Hunan case study (main results)
 
 ```bash
+cd paper
 python Multi-DePreSys4-Paper-area_avg_final_multiscatter.py
 ```
 
@@ -94,6 +124,7 @@ subfolders:
 ### 2\. China spatial analysis
 
 ```bash
+cd paper
 python Multi-DePreSys4-Paper-area_full_final_China.py
 ```
 

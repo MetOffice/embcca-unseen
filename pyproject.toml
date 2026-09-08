@@ -1,0 +1,86 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "embcca-unseen"
+dynamic = ["version"]
+description = "Fast multivariate bias correction (EMBCCA) for UNSEEN compound-event analysis"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "BSD-3-Clause"
+license-files = ["LICENCE"]
+keywords = [
+    "bias-correction",
+    "multivariate",
+    "climate",
+    "UNSEEN",
+    "compound-events",
+]
+authors = [
+    { name = "Yiwei Yang" },
+    { name = "James Bacon" },
+    { name = "Lanpeng Ji" },
+    { name = "Nadhir Ben Rached" },
+    { name = "Catherine D. Bradshaw" },
+    { name = "Jemma C. S. Davie" },
+    { name = "Thomas Crocker" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: BSD License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Atmospheric Science",
+]
+
+# The method itself is pure NumPy. Keeping this list at one entry is what makes
+# the package installable with pip on any platform, with no compiler and no
+# system libraries. Anything heavier belongs in an optional extra below.
+dependencies = [
+    "numpy>=1.24",
+]
+
+[project.optional-dependencies]
+# The manuscript analyses in paper/ have their own, much heavier requirements
+# (SBCK, iris, cartopy, ...). They are provided by the conda environment in
+# environment.yml rather than as extras here -- see paper/README.md.
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.5",
+]
+
+[project.urls]
+Homepage = "https://github.com/MetOffice/embcca-unseen"
+Repository = "https://github.com/MetOffice/embcca-unseen"
+Issues = "https://github.com/MetOffice/embcca-unseen/issues"
+
+[tool.hatch.version]
+path = "src/embcca/__init__.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/embcca"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/embcca",
+    "tests",
+    "README.md",
+    "LICENCE",
+    "CITATION.cff",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B"]
