@@ -290,7 +290,7 @@ for k, v in timings.items():
     print(f"{k:10s}: {v:8.2f} s")
 
 # Averaging across time and ensemble member (for models) for plotting of maps further below
-for bc_method_name in bc_method_names:
+for mod_corrected_sbck in mod_corrected_sbck_list:
     mod_corrected_sbck_time_avg = mod_corrected_sbck.mean(axis=0)
     mod_corrected_sbck_time_avg_ensemble_mean = mod_corrected_sbck_time_avg.mean(axis=0)
     mod_corrected_sbck_list_mean.append(mod_corrected_sbck_time_avg_ensemble_mean)
