@@ -7,8 +7,15 @@
 import numpy as np
 import pytest
 
-from embcca import correct, correct_area_mean, correct_gridded
-from embcca.correction import _align, _covariance_eigen, _standardise
+from embcca import (
+    bias_adjust,
+    bias_adjust_area_mean,
+    bias_adjust_area_mean_unseen,
+    bias_adjust_gridded,
+    bias_adjust_gridded_unseen,
+    bias_adjust_unseen,
+)
+from embcca.adjustment import _align, _covariance_eigen, _standardise
 
 N_YEARS = 40
 N_MEMBERS = 25
@@ -157,14 +164,16 @@ def test_align_is_a_no_op_when_model_and_observed_agree():
 
 
 def test_corrected_data_takes_the_observed_mean(obs, mod):
-    corrected = correct_area_mean(mod, obs)
+    corrected = bias_adjust_area_mean_unseen(mod, obs)
 
     for member in range(N_MEMBERS):
-        assert np.allclose(corrected[:, member, :].mean(axis=0), obs.mean(axis=0), atol=1e-12)
+        assert np.allclose(
+            corrected[:, member, :].mean(axis=0), obs.mean(axis=0), atol=1e-12
+        )
 
 
 def test_corrected_data_takes_the_observed_correlation(obs, mod):
-    corrected = correct_area_mean(mod, obs)
+    corrected = bias_adjust_area_mean_unseen(mod, obs)
     observed_r = np.corrcoef(obs, rowvar=False)[0, 1]
 
     for member in range(N_MEMBERS):
@@ -178,20 +187,20 @@ def test_corrected_data_keeps_the_model_variance(obs, mod):
     This is what distinguishes EMBCCA from methods that transfer the observed
     variance too, and what makes it usable for UNSEEN.
     """
-    corrected = correct_area_mean(mod, obs)
+    corrected = bias_adjust_area_mean_unseen(mod, obs)
 
     assert np.allclose(corrected.std(axis=0), mod.std(axis=0), rtol=1e-12)
 
 
 def test_corrected_variance_is_not_the_observed_variance(obs, mod):
     """Guards the property above against a change that would silently invert it."""
-    corrected = correct_area_mean(mod, obs)
+    corrected = bias_adjust_area_mean_unseen(mod, obs)
 
     assert not np.allclose(corrected.std(axis=0), obs.std(axis=0), rtol=0.1)
 
 
 def test_correcting_observations_against_themselves_is_the_identity(obs):
-    corrected = correct_area_mean(obs[:, None, :].copy(), obs)
+    corrected = bias_adjust_area_mean_unseen(obs[:, None, :].copy(), obs)
 
     assert np.allclose(corrected[:, 0, :], obs, atol=1e-12)
 
@@ -201,7 +210,7 @@ def test_properties_hold_for_more_than_two_variables():
     obs = rng.normal(size=(N_YEARS, 3)) * [1.0, 6.0, 0.3]
     mod = rng.normal(size=(N_YEARS, 10, 3)) * [4.0, 0.5, 2.0]
 
-    corrected = correct_area_mean(mod, obs)
+    corrected = bias_adjust_area_mean_unseen(mod, obs)
 
     assert np.allclose(corrected.mean(axis=0), obs.mean(axis=0), atol=1e-12)
     assert np.allclose(corrected.std(axis=0), mod.std(axis=0), rtol=1e-12)
@@ -223,8 +232,10 @@ def test_single_cell_grid_matches_the_area_mean_form(obs, mod):
     A grid of one cell is the same problem as the area-mean case, so the two
     code paths must not be allowed to drift apart.
     """
-    from_area_mean = correct_area_mean(mod, obs)
-    from_grid = correct_gridded(as_grid(mod, ensemble=True), as_grid(obs, ensemble=False))
+    from_area_mean = bias_adjust_area_mean_unseen(mod, obs)
+    from_grid = bias_adjust_gridded_unseen(
+        as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
+    )
 
     assert np.array_equal(from_grid[:, :, 0, 0, :], from_area_mean)
 
@@ -237,7 +248,7 @@ def test_grid_cells_are_corrected_independently(obs, mod):
     # Perturb one cell only.
     grid_mod[:, :, 1, 1, :] += rng.normal(size=(N_YEARS, N_MEMBERS, N_VARS)) * 20.0
 
-    corrected = correct_gridded(grid_mod, grid_obs)
+    corrected = bias_adjust_gridded_unseen(grid_mod, grid_obs)
 
     assert np.array_equal(corrected[:, :, 0, 0, :], corrected[:, :, 0, 1, :])
     assert not np.allclose(corrected[:, :, 0, 0, :], corrected[:, :, 1, 1, :])
@@ -250,7 +261,7 @@ def test_grid_cells_are_corrected_independently(obs, mod):
 
 @pytest.mark.parametrize("dtype", [np.float32, np.float64])
 def test_output_matches_input_shape_and_dtype(obs, mod, dtype):
-    corrected = correct_area_mean(mod.astype(dtype), obs.astype(dtype))
+    corrected = bias_adjust_area_mean_unseen(mod.astype(dtype), obs.astype(dtype))
 
     assert corrected.shape == mod.shape
     assert corrected.dtype == dtype
@@ -259,7 +270,7 @@ def test_output_matches_input_shape_and_dtype(obs, mod, dtype):
 def test_gridded_output_matches_input_shape_and_dtype(obs, mod):
     grid_mod = as_grid(mod, ensemble=True)
 
-    corrected = correct_gridded(grid_mod, as_grid(obs, ensemble=False))
+    corrected = bias_adjust_gridded_unseen(grid_mod, as_grid(obs, ensemble=False))
 
     assert corrected.shape == grid_mod.shape
     assert corrected.dtype == grid_mod.dtype
@@ -268,7 +279,7 @@ def test_gridded_output_matches_input_shape_and_dtype(obs, mod):
 def test_inputs_are_not_modified(obs, mod):
     obs_before, mod_before = obs.copy(), mod.copy()
 
-    correct_area_mean(mod, obs)
+    bias_adjust_area_mean_unseen(mod, obs)
 
     assert np.array_equal(obs, obs_before)
     assert np.array_equal(mod, mod_before)
@@ -279,35 +290,39 @@ def test_inputs_are_not_modified(obs, mod):
 # ---------------------------------------------------------------------------
 
 
-def test_correct_dispatches_three_dimensional_input_to_the_area_mean_form(obs, mod):
-    assert np.array_equal(correct(mod, obs), correct_area_mean(mod, obs))
+def test_bias_adjust_dispatches_three_dimensional_input_to_the_area_mean_form(obs, mod):
+    assert np.array_equal(bias_adjust_unseen(mod, obs), bias_adjust_area_mean_unseen(mod, obs))
 
 
-def test_correct_dispatches_five_dimensional_input_to_the_gridded_form(obs, mod):
-    grid_mod, grid_obs = as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
-
-    assert np.array_equal(correct(grid_mod, grid_obs), correct_gridded(grid_mod, grid_obs))
-
-
-def test_correct_forwards_eps_to_the_gridded_form(obs, mod):
+def test_bias_adjust_dispatches_five_dimensional_input_to_the_gridded_form(obs, mod):
     grid_mod, grid_obs = as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
 
     assert np.array_equal(
-        correct(grid_mod, grid_obs, eps=1e-3), correct_gridded(grid_mod, grid_obs, eps=1e-3)
+        bias_adjust_unseen(grid_mod, grid_obs), bias_adjust_gridded_unseen(grid_mod, grid_obs)
     )
 
 
-def test_correct_rejects_eps_for_area_mean_input(obs, mod):
-    with pytest.raises(TypeError):
-        correct(mod, obs, eps=1e-3)
+def test_bias_adjust_forwards_eps_to_the_gridded_form(obs, mod):
+    grid_mod, grid_obs = as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
+
+    assert np.array_equal(
+        bias_adjust_unseen(grid_mod, grid_obs, eps=1e-3),
+        bias_adjust_gridded_unseen(grid_mod, grid_obs, eps=1e-3),
+    )
+
+
+def test_bias_adjust_forwards_eps_to_the_area_mean_form(obs, mod):
+    assert np.array_equal(
+        bias_adjust_unseen(mod, obs, eps=1e-3), bias_adjust_area_mean_unseen(mod, obs, eps=1e-3)
+    )
 
 
 @pytest.mark.parametrize("ndim", [1, 2, 4, 6])
-def test_correct_rejects_unsupported_dimensions(ndim):
+def test_bias_adjust_rejects_unsupported_dimensions(ndim):
     shaped = np.ones((2,) * ndim)
 
     with pytest.raises(ValueError, match="Unsupported dimensions"):
-        correct(shaped, shaped)
+        bias_adjust_unseen(shaped, shaped)
 
 
 # ---------------------------------------------------------------------------
@@ -321,7 +336,7 @@ def test_gridded_handles_a_cell_with_no_variance(obs, mod):
     grid_obs = as_grid(obs, ensemble=False).copy()
     grid_mod[:, :, 0, 0, 1] = 3.0
 
-    corrected = correct_gridded(grid_mod, grid_obs)
+    corrected = bias_adjust_gridded_unseen(grid_mod, grid_obs)
 
     assert np.isfinite(corrected).all()
 
@@ -332,6 +347,170 @@ def test_gridded_handles_perfectly_correlated_variables(obs):
     grid_mod = np.stack([column, column], axis=-1)[:, None, None, None, :]
     grid_obs = as_grid(obs, ensemble=False)
 
-    corrected = correct_gridded(grid_mod, grid_obs)
+    corrected = bias_adjust_gridded_unseen(grid_mod, grid_obs)
 
     assert np.isfinite(corrected).all()
+
+
+# ---------------------------------------------------------------------------
+# The two variants
+# ---------------------------------------------------------------------------
+
+VARIANTS = [
+    pytest.param(
+        bias_adjust_unseen,
+        bias_adjust_area_mean_unseen,
+        bias_adjust_gridded_unseen,
+        id="unseen",
+    ),
+    pytest.param(bias_adjust, bias_adjust_area_mean, bias_adjust_gridded, id="full"),
+]
+
+
+def test_full_variant_takes_the_observed_standard_deviation(obs, mod):
+    """bias_adjust transfers the observed spread, unlike bias_adjust_unseen."""
+    corrected = bias_adjust_area_mean(mod, obs)
+
+    assert np.allclose(corrected.std(axis=0), obs.std(axis=0), rtol=1e-12)
+
+
+def test_full_variant_does_not_keep_the_model_standard_deviation(obs, mod):
+    corrected = bias_adjust_area_mean(mod, obs)
+
+    assert not np.allclose(corrected.std(axis=0), mod.std(axis=0), rtol=0.1)
+
+
+def test_the_two_variants_differ_when_the_spreads_differ(obs, mod):
+    """They coincide only where model and observed spread already agree."""
+    assert not np.allclose(
+        bias_adjust_area_mean(mod, obs), bias_adjust_area_mean_unseen(mod, obs)
+    )
+
+
+def test_variants_agree_when_model_and_observed_spread_match(obs):
+    """The two rescalings are the same operation when mod_std == obs_std."""
+    single = obs[:, None, :].copy()
+
+    assert np.allclose(
+        bias_adjust_area_mean(single, obs), bias_adjust_area_mean_unseen(single, obs), atol=1e-12
+    )
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_both_variants_take_the_observed_mean(dispatch, area_mean, gridded, obs, mod):
+    corrected = area_mean(mod, obs)
+
+    assert np.allclose(corrected.mean(axis=0), obs.mean(axis=0), atol=1e-12)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_both_variants_take_the_observed_correlation(dispatch, area_mean, gridded, obs, mod):
+    corrected = area_mean(mod, obs)
+    observed_r = np.corrcoef(obs, rowvar=False)[0, 1]
+
+    for member in range(N_MEMBERS):
+        member_r = np.corrcoef(corrected[:, member, :], rowvar=False)[0, 1]
+        assert member_r == pytest.approx(observed_r, abs=1e-12)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_both_variants_dispatch_on_layout(dispatch, area_mean, gridded, obs, mod):
+    grid_mod, grid_obs = as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
+
+    assert np.array_equal(dispatch(mod, obs), area_mean(mod, obs))
+    assert np.array_equal(dispatch(grid_mod, grid_obs), gridded(grid_mod, grid_obs))
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_both_variants_reject_unsupported_dimensions(dispatch, area_mean, gridded):
+    shaped = np.ones((2,) * 4)
+
+    with pytest.raises(ValueError, match="Unsupported dimensions"):
+        dispatch(shaped, shaped)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_single_cell_grid_matches_area_mean_for_both_variants(
+    dispatch, area_mean, gridded, obs, mod
+):
+    from_area_mean = area_mean(mod, obs)
+    from_grid = gridded(as_grid(mod, ensemble=True), as_grid(obs, ensemble=False))
+
+    assert np.array_equal(from_grid[:, :, 0, 0, :], from_area_mean)
+
+
+# ---------------------------------------------------------------------------
+# mod_future
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_output_matches_the_future_shape_not_the_calibration_shape(
+    dispatch, area_mean, gridded, obs, mod
+):
+    """The result corresponds to the data actually adjusted."""
+    future = mod[: N_YEARS // 2]
+
+    corrected = area_mean(mod, obs, future)
+
+    assert corrected.shape == future.shape
+    assert corrected.shape != mod.shape
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_gridded_output_matches_the_future_shape(dispatch, area_mean, gridded, obs, mod):
+    grid_mod, grid_obs = as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
+    future = grid_mod[: N_YEARS // 2]
+
+    corrected = gridded(grid_mod, grid_obs, future)
+
+    assert corrected.shape == future.shape
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_passing_the_calibration_data_as_future_matches_omitting_it(
+    dispatch, area_mean, gridded, obs, mod
+):
+    """Standardising the calibration block with its own statistics is what the
+    no-future path already does, so the two must agree exactly."""
+    assert np.array_equal(area_mean(mod, obs, mod), area_mean(mod, obs))
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_gridded_calibration_as_future_matches_omitting_it(
+    dispatch, area_mean, gridded, obs, mod
+):
+    grid_mod, grid_obs = as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
+
+    assert np.array_equal(gridded(grid_mod, grid_obs, grid_mod), gridded(grid_mod, grid_obs))
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_future_is_standardised_with_calibration_statistics(
+    dispatch, area_mean, gridded, obs, mod
+):
+    """A shifted future period must stay shifted after adjustment.
+
+    If the future block were standardised with its own mean, the offset would
+    be absorbed and the two results would coincide.
+    """
+    shifted = mod + 100.0
+
+    assert not np.allclose(area_mean(mod, obs, shifted), area_mean(mod, obs))
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_mod_future_is_forwarded_by_the_dispatcher(dispatch, area_mean, gridded, obs, mod):
+    future = mod[: N_YEARS // 2]
+
+    assert np.array_equal(dispatch(mod, obs, future), area_mean(mod, obs, future))
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_future_inputs_are_not_modified(dispatch, area_mean, gridded, obs, mod):
+    future = (mod + 3.0)[: N_YEARS // 2]
+    before = future.copy()
+
+    area_mean(mod, obs, future)
+
+    assert np.array_equal(future, before)

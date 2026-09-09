@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from embcca import correct
+from embcca import bias_adjust_unseen
 
 DATA = Path(__file__).resolve().parent.parent / "example-data"
 
@@ -120,14 +120,14 @@ def main():
     # --- area-mean: average away the two spatial axes first ---
     mod_area = mod.mean(axis=(2, 3))   # (year, member, variable)
     obs_area = obs.mean(axis=(1, 2))   # (year, variable)
-    corrected_area = correct(mod_area, obs_area)
+    corrected_area = bias_adjust_unseen(mod_area, obs_area)
 
     print(f"\n--- area-mean ---\n{mod_area.shape} -> {corrected_area.shape}")
     print_area_mean_summary(obs_area, mod_area, corrected_area)
     print_area_mean_checks(obs_area, mod_area, corrected_area)
 
     # --- gridded: the same call, applied independently at each grid cell ---
-    corrected = correct(mod, obs)
+    corrected = bias_adjust_unseen(mod, obs)
 
     print(f"\n--- gridded ---\n{mod.shape} -> {corrected.shape}")
     print_cell_table(obs, mod, corrected)

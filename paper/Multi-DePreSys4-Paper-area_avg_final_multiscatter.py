@@ -52,7 +52,7 @@ DATA_PATH = Path(DATA_DIR)
 from SBCK import QDM, CDFt, R2D2, dOTC, MRec
 
 # EMBCCA bias adjustment (pip install embcca-unseen)
-from embcca import correct
+from embcca import bias_adjust_unseen
 
 # import functions
 from fidelity_test_cube import FidelityTestCube
@@ -373,7 +373,7 @@ def plot_scatter_sixpanel(obs_combined, mod_raw, meancor_combined,
 
 ## Bias Correction: Yiweh's method ##
 # correct mean and correlation, preserve the variance
-mod_corrected_eigen = correct(mod_raw, obs_combined)
+mod_corrected_eigen = bias_adjust_unseen(mod_raw, obs_combined)
 
 
 ## Comparison with other multivariate bias-adjustment methods using SBCK tool ##
@@ -401,7 +401,7 @@ def apply_sbck_to_ensemble(obs, model_ensemble, bc_type, idx_train, idx_test):
     corrected = np.empty_like(X_test)
 
     if bc_type == 'EMBCCA-UNSEEN':
-        corrected = correct(X_test, obs)
+        corrected = bias_adjust_unseen(X_test, obs)
     else:
         for i in range(n_ensembles):
             Y0 = np.asarray(obs)

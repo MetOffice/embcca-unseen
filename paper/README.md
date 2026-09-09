@@ -13,8 +13,9 @@ The two analyses from:
 | `Multi-DePreSys4-Paper-area_full_final_China.py` | China-wide spatial analysis. |
 | `fidelity_test_cube.py` | Helper module for UNSEEN-style fidelity testing, imported by both scripts. |
 
-Both scripts apply the bias adjustment by calling `embcca.correct` from the
-`embcca-unseen` package.
+Both scripts apply the bias adjustment by calling `embcca.bias_adjust_unseen`
+from the `embcca-unseen` package. That is the variant which keeps the model's
+own standard deviation, as the UNSEEN approach requires.
 
 ## Requirements
 

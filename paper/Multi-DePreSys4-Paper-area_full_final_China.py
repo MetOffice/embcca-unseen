@@ -140,7 +140,7 @@ mod_raw = np.ma.array(mod_raw, mask=mask5d, copy=False)
 ## Bias Correction: Yiweh's method ##
 # correct mean and correlation, preserve the variance
 
-# mod_corrected_eigen = embcca.correct(mod_raw, obs_combined)
+# mod_corrected_eigen = embcca.bias_adjust_unseen(mod_raw, obs_combined)
 
 ## Comparison with other multivariate bias-adjustment methods using SBCK tool ##
 
@@ -204,7 +204,7 @@ def apply_sbck_to_ensemble(obs, model_ensemble, bc_type, seed=42, eps=1e-6):
     # ---- EMBCCA-UNSEEN: expects (T,E,lon,lat,V) and obs (T,lon,lat,V),
     # ---- and returns the same shape as X_test ----
     if bc_type == 'EMBCCA-UNSEEN':
-        return embcca.correct(X_test, obs)
+        return embcca.bias_adjust_unseen(X_test, obs)
 
     SBCK = get_bc_handler(bc_type)
     if SBCK is None:

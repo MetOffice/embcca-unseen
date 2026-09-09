@@ -1,7 +1,7 @@
 # Example data
 
 A small 2x2 grid cut from the China domain, stored ready to pass straight to
-`embcca.correct` with no reshaping.
+`embcca.bias_adjust_unseen` with no reshaping.
 
 | File | Shape | Dtype | Axes |
 |---|---|---|---|
