@@ -392,7 +392,7 @@ def report(results, blocks):
     which differs between EMBCCA and SBCK because SBCK skips masked cells.
     """
     width = max(len(name) for name in results)
-    base = min(results.values())
+    base = results[LOOP]
 
     header = (
         f"{'method':{width}}  {'time':>10}  {'blocks':>9}  {'per block':>10}  {'relative':>9}"
@@ -403,7 +403,7 @@ def report(results, blocks):
         n = blocks[name]
         print(
             f"{name:{width}}  {seconds * 1000:>9.1f}ms  {n:>9}"
-            f"  {seconds / n * 1e6:>9.1f}us  {seconds / base:>8.1f}x"
+            f"  {seconds / n * 1e6:>9.1f}us  {seconds / base:>8.3f}x"
         )
 
 
