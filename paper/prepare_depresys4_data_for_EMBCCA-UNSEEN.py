@@ -33,9 +33,9 @@ YEARS = [1961, 1963]
 # YEARS = [1992, 2023]
 SEASON = "jja"  # e.g. "djf", "mam", "jjas", or [6, 7, 8]
 
-SHAPEFILE = "Natural_Earth/v5.0.1/ne_10m_admin_0_countries.shp"
-OUT_DIR = "data"
-RAW_DATA_DIR = "CMIP6"
+SHAPEFILE = "/data/users/appldata/Data/Spatial_data/Natural_Earth/v5.0.1/ne_10m_admin_0_countries.shp"
+OUT_DIR = "/data/users/cst/Projects/CSSP/CSSP_China/FY2526/Yiwei_paper/data"
+RAW_DATA_DIR = "/data/users/managecmip/champ/CMIP6"
 INSTITUTION_ID = "MOHC"
 SOURCE_ID = "HadGEM3-GC31-MM"
 
@@ -243,6 +243,27 @@ def _add_year_dim(cube: iris.cube.Cube) -> iris.cube.Cube:
         iris.coord_categorisation.add_year(cube, "time", name="year")
     return cube
 
+
+def _add_season_year_dim(cube: iris.cube.Cube) -> iris.cube.Cube:
+    '''
+    Add a season_year coordinate to the cube if it doesn't already exist.
+
+    Inputs:
+    ------
+    cube : iris.cube.Cube
+        The input cube to which the season_year coordinate will be added.
+
+    Returns:
+    -------
+    cube : iris.cube.Cube
+        The cube with the season_year coordinate added.
+    '''
+    try:
+        cube.coord("season_year")
+    except Exception:
+        iris.coord_categorisation.add_season_year(cube, "time", name="season_year")
+    return cube
+
 def _subset_by_shape(cube: iris.cube.Cube, region_shape, minimum_weight: float = 0.5) -> iris.cube.Cube:
     '''
     Subset the cube to the region defined by the given shape, with an optional border.
@@ -341,6 +362,7 @@ def _load_cubes(varname: str, years: list[int], region_shape) -> iris.cube.CubeL
         cube = iris.load_cube(filename, lat_constraint & lon_constraint)
         cube = _add_month_num_dim(cube)
         cube = _add_year_dim(cube)
+        cube = _add_season_year_dim(cube)
         cube = _subset_by_shape(cube, region_shape, minimum_weight=MINIMUM_WEIGHT)
         cube.attributes = {"sub_experiment_id": _sub_experiment_id_from_filename(filename),
                            "realisation": _realisation_from_filename(filename)}
@@ -368,28 +390,22 @@ def _season_cube(cube: iris.cube.Cube, varname: str,
         A tuple containing the aggregated seasonal cube and a descriptive long name.
     '''
     months, season_label = _parse_season(season)
-    seasonal = cube.extract(
-        iris.Constraint(month_number=lambda cell: int(getattr(cell, "point", cell)) in months)
-    )
+    seasonal = cube.extract(iris.Constraint(month_number=lambda cell: int(getattr(cell, "point", cell)) in months))
     if seasonal is None:
         available_months = sorted({int(value) for value in cube.coord("month_number").points.tolist()})
-        raise ValueError(
-            f"No data found for season {season_label!r} (months={months}) in cube "
-            f"with sub_experiment_id={cube.attributes.get('sub_experiment_id')}. "
-            f"Available months are {available_months}."
-        )
+        raise ValueError(f"No data found for season {season_label!r} (months={months}) in cube with sub_experiment_id={cube.attributes.get('sub_experiment_id')}. Available months are {available_months}.")
 
     # Keep only complete seasonal years (e.g. drop Nov-Dec-only first chunk for MOHC starts).
-    season_years = seasonal.coord("year").points.astype(int)
+    season_years = seasonal.coord("season_year").points.astype(int)
     season_months = seasonal.coord("month_number").points.astype(int)
     complete_years = [int(year) for year in np.unique(season_years) if set(season_months[season_years == year]) == set(months)]
-    seasonal = seasonal.extract(iris.Constraint(year=lambda cell: int(getattr(cell, "point", cell)) in complete_years))
+    seasonal = seasonal.extract(iris.Constraint(season_year=lambda cell: int(getattr(cell, "point", cell)) in complete_years))
     if seasonal is None:
         raise ValueError(f"No complete {season_label!r} seasons found in cube with sub_experiment_id={cube.attributes.get('sub_experiment_id')}.")
 
     if varname == "tas":
         seasonal.data = seasonal.data - 273.15
-        out = seasonal.aggregated_by("year", iris.analysis.MEAN)
+        out = seasonal.aggregated_by("season_year", iris.analysis.MEAN)
         out.units = "celsius"
         return out, f"mean_{season_label}_temperature"
 
@@ -398,7 +414,7 @@ def _season_cube(cube: iris.cube.Cube, varname: str,
             month_mask = seasonal.coord("month_number").points == month
             seasonal.data[month_mask, ...] = seasonal.data[month_mask, ...] * MONTH_LENGTHS[month]
 
-        out = seasonal.aggregated_by("year", iris.analysis.SUM)
+        out = seasonal.aggregated_by("season_year", iris.analysis.SUM)
         out.units = "mm"
         return out, f"total_{season_label}_precipitation"
 
@@ -444,9 +460,9 @@ def _build_output_cube(season_cubelist: iris.cube.CubeList, long_name: str) -> i
         if cube.shape[-2:] != (len(lats), len(lons)):
             raise ValueError(f"Grid mismatch across loaded cubes. Expected lat/lon shape {(len(lats), len(lons))}, got {cube.shape[-2:]} for sub_experiment_id={sub_exp_id}, realisation={realisation}.")
 
-        years = cube.coord("year").points.astype(int)
-        for t, year in enumerate(years):
-            leadtime = int(year) - sub_exp_id
+        season_years = cube.coord("season_year").points.astype(int)
+        for t, season_year in enumerate(season_years):
+            leadtime = int(season_year) - sub_exp_id
             if leadtime in leadtimes:
                 k = leadtime - 1
                 data[i, j, k, :, :] = cube.data[t, :, :]
@@ -458,11 +474,11 @@ def _build_output_cube(season_cubelist: iris.cube.CubeList, long_name: str) -> i
                                                  (icoords.DimCoord(lats, standard_name="latitude", units="degrees"), 3),
                                                  (icoords.DimCoord(lons, standard_name="longitude", units="degrees"), 4),])
 
-    year_points = (np.array(sub_experiment_ids)[:, None, None]
-                   + np.array(leadtimes)[None, None, :]
-                   + np.zeros((len(sub_experiment_ids), len(realisations), len(leadtimes)), dtype=int))
+    season_year_points = (np.array(sub_experiment_ids)[:, None, None]
+                          + np.array(leadtimes)[None, None, :]
+                          + np.zeros((len(sub_experiment_ids), len(realisations), len(leadtimes)), dtype=int))
 
-    output.add_aux_coord(iris.coords.AuxCoord(year_points, long_name="year"), data_dims=(0, 1, 2))
+    output.add_aux_coord(iris.coords.AuxCoord(season_year_points, long_name="season_year"), data_dims=(0, 1, 2))
 
     return output
 
@@ -495,7 +511,7 @@ def run() -> None:
 
     output_cube = _build_output_cube(season_cubelist, output_long_name)
 
-    print(output_cube.coord("year").points)
+    print(output_cube.coord("season_year").points)
     print(output_cube.data.max())
     print(output_cube.data.min())
 
