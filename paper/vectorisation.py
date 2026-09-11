@@ -11,11 +11,11 @@ against in the manuscript (dOTC, MRec, R2D2) can only be applied that way, so
 EMBCCA uses the same structure to keep the published timing comparison fair.
 
 This script asks the separate question of what EMBCCA costs once that
-constraint is lifted. It holds a batched implementation alongside the packaged
-one, checks the two agree, and times:
+constraint is lifted. The package provides both, selected by `vectorised`, so
+this script only checks they agree and times:
 
-    EMBCCA-UNSEEN (vectorised)   the inline implementation below
-    EMBCCA-UNSEEN (loop)         embcca.bias_adjust_gridded_unseen
+    EMBCCA-UNSEEN (vectorised)   embcca.bias_adjust_gridded_unseen(vectorised=True)
+    EMBCCA-UNSEEN (loop)         embcca.bias_adjust_gridded_unseen(vectorised=False)
     dOTC, MRec, R2D2             SBCK, per cell and member
 
 It reads the same four files as `Multi-DePreSys4-Paper-area_full_final_China.py`
@@ -76,144 +76,10 @@ RTOL = 1e-9
 
 DATA_PATH = Path(DATA_DIR)
 
-EPS = 1e-6
 SEED = 42
 
 VECTORISED = "EMBCCA-UNSEEN (vectorised)"
 LOOP = "EMBCCA-UNSEEN (loop)"
-
-
-# ---------------------------------------------------------------------------
-# Vectorised EMBCCA
-# ---------------------------------------------------------------------------
-
-
-def _batched_cov(standardised, n_years):
-    """``np.cov(block, rowvar=False)`` for a whole stack of blocks.
-
-    Two details of ``np.cov`` have to be reproduced exactly, and neither is
-    cosmetic. It promotes its input to float64 before doing anything, and it
-    re-centres before taking the product. Departing from either changes the
-    covariance in the last bits, and ``np.linalg.eigh`` can amplify that into
-    an eigenvector sign flip, which does not cancel in the whitening and
-    recolouring below. The model data is float32, so the promotion matters
-    most: without it the two implementations disagree by more than 100% on a
-    large fraction of blocks.
-    """
-    centred = standardised.astype(np.float64, copy=False)
-    centred = centred - centred.mean(axis=1, keepdims=True)
-    return centred.transpose(0, 2, 1) @ centred / (n_years - 1)
-
-
-def embcca_vectorised(mod, obs, eps=EPS):
-    """Batched equivalent of ``embcca.bias_adjust_gridded_unseen``.
-
-    Each grid cell and ensemble member is an independent ``(n_years, n_vars)``
-    problem, so they can be stacked along a leading batch axis and handed to
-    ``np.linalg.eigh``, which decomposes a whole stack of matrices in one call.
-    The Python loops disappear; the arithmetic is unchanged.
-
-    Variable names follow the original per-cell implementation so the two can
-    be read side by side. The differences are that every quantity carries a
-    leading batch axis, and that ``Lambda_sqrt`` and ``Gamma_inv_sqrt`` are
-    held as diagonals rather than as matrices built with ``np.diag``, so they
-    apply by elementwise multiplication.
-
-    Parameters
-    ----------
-    mod : array, shape (n_years, n_ensembles, n_lons, n_lats, n_vars)
-    obs : array, shape (n_years, n_lons, n_lats, n_vars)
-    eps : float
-        Small number to avoid divide-by-zero and negative/zero eigenvalues.
-
-    Returns
-    -------
-    mod_corrected : array, same shape as mod
-
-    Notes
-    -----
-    Speed is bought with memory. The looped implementation holds one
-    ``(n_years, n_vars)`` block at a time, so its footprint is essentially the
-    input and output arrays. This version instead materialises every block at
-    once, several times over: ``mod_cells``, ``mod_st``, the centred copy
-    inside :func:`_batched_cov`, each intermediate ``Zm``, and the result are
-    all ``n_ensembles * n_cells * n_years * n_vars`` elements. At eight bytes
-    per element that is roughly 120 MB apiece for the China domain with 50
-    adjusted members, and several are live simultaneously.
-
-    If that does not fit, process the ensemble axis in chunks and concatenate
-    the results: each chunk is still batched, so most of the speedup survives,
-    and peak memory falls by roughly the number of chunks. Grid cells could be
-    chunked instead, though the ensemble axis is usually the longer one and
-    splits without touching the observed quantities, which are shared across
-    members at a given cell.
-
-    Masked cells arrive as NaN and stay NaN: ``np.linalg.eigh`` propagates them
-    rather than raising, so ocean cells cost time but produce no output.
-    """
-    n_years, n_ensembles, n_lons, n_lats, n_vars = mod.shape
-    n_cells = n_lons * n_lats
-
-    # --- OBS at every grid cell at once: (n_cells, time, vars) ---
-    obs_cells = np.moveaxis(obs, 0, -2).reshape(n_cells, n_years, n_vars)
-
-    # mean/std over time for each variable
-    obs_mean = np.mean(obs_cells, axis=1)
-    obs_std = np.std(obs_cells, axis=1)
-
-    # avoid divide-by-zero
-    obs_std = np.where(obs_std < eps, eps, obs_std)
-
-    # standardise
-    obs_st = (obs_cells - obs_mean[:, None, :]) / obs_std[:, None, :]
-
-    # covariance across variables, per cell (n_cells, vars, vars)
-    Cov_obs = _batched_cov(obs_st, n_years)
-
-    # eigen-decomp, batched over cells
-    eigenvalues_obs, W = np.linalg.eigh(Cov_obs)
-    eigenvalues_obs = np.maximum(eigenvalues_obs, eps)
-    Lambda_sqrt = np.sqrt(eigenvalues_obs)
-
-    # --- MOD at every grid cell and ensemble at once ---
-    mod_cells = np.moveaxis(mod, 0, -2).reshape(n_ensembles * n_cells, n_years, n_vars)
-
-    mod_mean = np.mean(mod_cells, axis=1)
-    mod_std = np.std(mod_cells, axis=1)
-    mod_std = np.where(mod_std < eps, eps, mod_std)
-
-    mod_st = (mod_cells - mod_mean[:, None, :]) / mod_std[:, None, :]
-
-    Cov_mod = _batched_cov(mod_st, n_years)
-
-    eigenvalues_mod, V = np.linalg.eigh(Cov_mod)
-    eigenvalues_mod = np.maximum(eigenvalues_mod, eps)
-    Gamma_inv_sqrt = 1.0 / np.sqrt(eigenvalues_mod)
-
-    # The observed quantities are shared by every ensemble member at a given
-    # cell, so repeat them along the ensemble axis to line the batches up.
-    batch = (n_ensembles, n_cells)
-    Lambda_sqrt = np.broadcast_to(Lambda_sqrt, (*batch, n_vars)).reshape(-1, n_vars)
-    W = np.broadcast_to(W, (*batch, n_vars, n_vars)).reshape(-1, n_vars, n_vars)
-    obs_mean = np.broadcast_to(obs_mean, (*batch, n_vars)).reshape(-1, n_vars)
-
-    # Whitening + recoloring:
-    # Zm = mod_st @ V @ Gamma^-1/2 @ Lambda^1/2 @ W.T
-    Zm = mod_st @ V
-    Zm = Zm * Gamma_inv_sqrt[:, None, :]
-    Zm = Zm * Lambda_sqrt[:, None, :]
-    Zm = Zm @ W.transpose(0, 2, 1)
-
-    # Back to observed scale (observed mean, model standard deviation)
-    mod_corrected = Zm * mod_std[:, None, :] + obs_mean[:, None, :]
-
-    # The package writes into np.empty_like(mod), so the result carries the
-    # input dtype however the intermediates were promoted.
-    mod_corrected = mod_corrected.astype(mod.dtype, copy=False)
-
-    return np.moveaxis(
-        mod_corrected.reshape(n_ensembles, n_lons, n_lats, n_years, n_vars), -2, 0
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -355,8 +221,8 @@ def time_once(fn):
 def check_agreement(mod_test, obs):
     """The speedup only means anything if the answer is unchanged."""
     print("Agreement between the two EMBCCA implementations")
-    reference = embcca.bias_adjust_gridded_unseen(mod_test, obs)
-    batched = embcca_vectorised(mod_test, obs)
+    reference = embcca.bias_adjust_gridded_unseen(mod_test, obs, vectorised=False)
+    batched = embcca.bias_adjust_gridded_unseen(mod_test, obs, vectorised=True)
 
     finite = np.isfinite(reference)
     same_pattern = np.array_equal(finite, np.isfinite(batched))
@@ -420,8 +286,12 @@ def main():
     print(f"{n_years} years | {N_ENSEMBLES} members, {n_adjusted} adjusted\n")
 
     results = {
-        VECTORISED: time_once(lambda: embcca_vectorised(mod_test, obs)),
-        LOOP: time_once(lambda: embcca.bias_adjust_gridded_unseen(mod_test, obs)),
+        VECTORISED: time_once(
+            lambda: embcca.bias_adjust_gridded_unseen(mod_test, obs, vectorised=True)
+        ),
+        LOOP: time_once(
+            lambda: embcca.bias_adjust_gridded_unseen(mod_test, obs, vectorised=False)
+        ),
     }
 
     check_agreement(mod_test, obs)

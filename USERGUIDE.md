@@ -221,7 +221,15 @@ Both NaN and masked arrays work, and neither raises an exception.
 **NaN** propagates per block. A member or cell whose input contains NaN
 produces NaN in the output; its neighbours are unaffected. 
 
-**Masked arrays** are returned as masked arrays with the mask preserved.
+**Masked arrays** are accepted, and masked entries are filled with NaN on the
+way in, so they behave exactly as NaN does. The result is always a plain
+`ndarray`: NaN is the missing-data convention throughout, and returning a mask
+as well would mean carrying the same information twice. If you need a masked
+array back, rebuild it from the NaNs:
+
+```python
+corrected = np.ma.masked_invalid(bias_adjust_unseen(mod, obs))
+```
 
 There is no skipping: E.g., a fully masked ocean cell still costs the same time as a
 unmasked land cell, it just produces nothing. If you are adjusting a large domain that

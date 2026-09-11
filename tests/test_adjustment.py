@@ -649,3 +649,345 @@ def test_explicit_forms_reject_the_wrong_rank(dispatch, area_mean, gridded, obs,
 
     with pytest.raises(ValueError, match="expected 5 with an ensemble axis"):
         gridded(mod, obs)
+
+
+# ---------------------------------------------------------------------------
+# Batched and looped implementations
+# ---------------------------------------------------------------------------
+
+from embcca.adjustment import (  # noqa: E402
+    _batched_covariance,
+    _batched_covariance_eigen,
+    _from_blocks,
+    _gridded_loop,
+    _repeat_per_member,
+    _to_blocks,
+    _vectorised,
+)
+
+
+def test_batched_covariance_matches_numpy_cov_bit_for_bit():
+    """The whole agreement between the two paths rests on this.
+
+    A one-ulp difference here can flip an eigenvector sign, which does not
+    cancel downstream and surfaces as a difference of hundreds of percent.
+    """
+    rng = np.random.default_rng(0)
+    blocks = rng.normal(size=(40, 30, 3)) * [2.0, 9.0, 0.4]
+
+    batched = _batched_covariance(blocks)
+    per_block = np.stack([np.cov(b, rowvar=False) for b in blocks])
+
+    assert np.array_equal(batched, per_block)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_batched_covariance_matches_numpy_cov_for_both_dtypes(dtype):
+    rng = np.random.default_rng(1)
+    blocks = (rng.normal(size=(25, 30, 2)) * [5.0, 0.3]).astype(dtype)
+
+    assert np.array_equal(
+        _batched_covariance(blocks),
+        np.stack([np.cov(b, rowvar=False) for b in blocks]),
+    )
+
+
+def test_batched_covariance_eigen_matches_the_single_block_form():
+    rng = np.random.default_rng(2)
+    blocks = rng.normal(size=(12, 30, 2))
+
+    values, vectors = _batched_covariance_eigen(blocks, 1e-6)
+    for i, block in enumerate(blocks):
+        one_value, one_vector = _covariance_eigen(block, 1e-6)
+        assert np.array_equal(values[i], one_value)
+        assert np.array_equal(vectors[i], one_vector)
+
+
+def test_to_blocks_and_from_blocks_round_trip():
+    rng = np.random.default_rng(3)
+    field = rng.normal(size=(30, 4, 3, 5, 2))
+
+    blocks = _to_blocks(field)
+
+    assert blocks.shape == (4 * 3 * 5, 30, 2)
+    assert np.array_equal(_from_blocks(blocks, (4, 3, 5)), field)
+
+
+def test_to_blocks_handles_observations_without_an_ensemble_axis():
+    rng = np.random.default_rng(4)
+    field = rng.normal(size=(30, 3, 5, 2))
+
+    blocks = _to_blocks(field)
+
+    assert blocks.shape == (3 * 5, 30, 2)
+    assert np.array_equal(_from_blocks(blocks, (3, 5)), field)
+
+
+def test_repeat_per_member_matches_the_block_ordering():
+    """Observed quantities must line up with the model's member-major blocks."""
+    rng = np.random.default_rng(5)
+    obs = rng.normal(size=(30, 2, 3, 2))
+    n_ensembles = 4
+
+    per_cell = _to_blocks(obs)
+    repeated = _repeat_per_member(per_cell, n_ensembles)
+
+    assert repeated.shape == (n_ensembles * 2 * 3, 30, 2)
+    for member in range(n_ensembles):
+        start = member * 6
+        assert np.array_equal(repeated[start : start + 6], per_cell)
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("scale_by_obs_std", [False, True])
+def test_batched_and_looped_gridded_agree_bit_for_bit(dtype, scale_by_obs_std):
+    rng = np.random.default_rng(6)
+    mod = (rng.normal(size=(30, 5, 4, 3, 2)) * [40.0, 1.5] + [300.0, 22.0]).astype(dtype)
+    obs = (rng.normal(size=(30, 4, 3, 2)) * [28.0, 1.0] + [295.0, 21.0]).astype(dtype)
+
+    looped = _gridded_loop(mod, obs, None, 1e-6, scale_by_obs_std)
+    batched = _vectorised(mod, obs, None, 1e-6, scale_by_obs_std, 5)
+
+    assert np.array_equal(looped, batched)
+    assert looped.dtype == batched.dtype == dtype
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+def test_batched_and_looped_agree_with_mod_future(dtype):
+    rng = np.random.default_rng(7)
+    mod = rng.normal(size=(30, 4, 3, 3, 2)).astype(dtype)
+    obs = rng.normal(size=(30, 3, 3, 2)).astype(dtype)
+    future = rng.normal(size=(18, 4, 3, 3, 2)).astype(dtype)
+
+    assert np.array_equal(
+        _gridded_loop(mod, obs, future, 1e-6, False),
+        _vectorised(mod, obs, future, 1e-6, False, 5),
+    )
+
+
+def test_batched_and_looped_agree_on_degenerate_input():
+    rng = np.random.default_rng(8)
+    mod = rng.normal(size=(30, 4, 3, 3, 2))
+    obs = rng.normal(size=(30, 3, 3, 2))
+    mod[:, :, 1, 1, :] = np.nan           # a masked cell
+    mod[:, 0, 0, 0, 1] = 5.0              # a constant variable
+
+    looped = _gridded_loop(mod, obs, None, 1e-6, False)
+    batched = _vectorised(mod, obs, None, 1e-6, False, 5)
+
+    assert np.array_equal(np.isnan(looped), np.isnan(batched))
+    assert np.array_equal(looped[~np.isnan(looped)], batched[~np.isnan(batched)])
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_vectorised_flag_selects_the_implementation(dispatch, area_mean, gridded, obs, mod):
+    grid_mod, grid_obs = as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
+
+    assert np.array_equal(
+        gridded(grid_mod, grid_obs, vectorised=True),
+        gridded(grid_mod, grid_obs, vectorised=False),
+    )
+    assert np.array_equal(
+        dispatch(grid_mod, grid_obs, vectorised=False),
+        gridded(grid_mod, grid_obs, vectorised=False),
+    )
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_vectorised_defaults_to_true(dispatch, area_mean, gridded, obs, mod):
+    grid_mod, grid_obs = as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
+
+    assert np.array_equal(
+        gridded(grid_mod, grid_obs),
+        _vectorised(grid_mod, grid_obs, None, 1e-6, gridded is bias_adjust_gridded, 5),
+    )
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_vectorised_flag_applies_to_area_mean_too(dispatch, area_mean, gridded, obs, mod):
+    """Both layouts offer the choice, and both agree bit for bit."""
+    assert np.array_equal(
+        dispatch(mod, obs, vectorised=True), dispatch(mod, obs, vectorised=False)
+    )
+    assert np.array_equal(
+        dispatch(mod, obs, vectorised=False), area_mean(mod, obs, vectorised=False)
+    )
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+@pytest.mark.parametrize("vectorised, expected", [(True, "batched"), (False, "looped")])
+def test_vectorised_flag_actually_dispatches(
+    monkeypatch, dispatch, area_mean, gridded, obs, mod, vectorised, expected
+):
+    """The two implementations agree bit for bit, so equality cannot show which ran.
+
+    Record which one is reached instead, or a flag that silently ignored its
+    argument would pass every other test in this file.
+    """
+    import embcca.adjustment as adjustment
+
+    called = []
+    real_loop, real_batched = adjustment._gridded_loop, adjustment._vectorised
+
+    def spy_loop(*args, **kwargs):
+        called.append("looped")
+        return real_loop(*args, **kwargs)
+
+    def spy_batched(*args, **kwargs):
+        called.append("batched")
+        return real_batched(*args, **kwargs)
+
+    monkeypatch.setattr(adjustment, "_gridded_loop", spy_loop)
+    monkeypatch.setattr(adjustment, "_vectorised", spy_batched)
+
+    gridded(as_grid(mod, ensemble=True), as_grid(obs, ensemble=False), vectorised=vectorised)
+
+    assert called == [expected]
+
+
+from embcca.adjustment import _area_mean_loop  # noqa: E402
+
+
+@pytest.mark.parametrize("dtype", [np.float32, np.float64])
+@pytest.mark.parametrize("scale_by_obs_std", [False, True])
+def test_batched_and_looped_area_mean_agree_bit_for_bit(dtype, scale_by_obs_std):
+    rng = np.random.default_rng(9)
+    mod = (rng.normal(size=(30, 20, 2)) * [40.0, 1.5] + [300.0, 22.0]).astype(dtype)
+    obs = (rng.normal(size=(30, 2)) * [28.0, 1.0] + [295.0, 21.0]).astype(dtype)
+
+    looped = _area_mean_loop(mod, obs, None, 1e-6, scale_by_obs_std)
+    batched = _vectorised(mod, obs, None, 1e-6, scale_by_obs_std, 3)
+
+    assert np.array_equal(looped, batched)
+    assert looped.dtype == batched.dtype == dtype
+
+
+def test_batched_area_mean_agrees_with_mod_future():
+    rng = np.random.default_rng(10)
+    mod = rng.normal(size=(30, 8, 2))
+    obs = rng.normal(size=(30, 2))
+    future = rng.normal(size=(17, 8, 2))
+
+    assert np.array_equal(
+        _area_mean_loop(mod, obs, future, 1e-6, False),
+        _vectorised(mod, obs, future, 1e-6, False, 3),
+    )
+
+
+def test_vectorised_serves_both_layouts_from_one_function():
+    """A 1x1 grid is the area-mean problem, so the two routes must coincide."""
+    rng = np.random.default_rng(11)
+    mod = rng.normal(size=(30, 6, 2))
+    obs = rng.normal(size=(30, 2))
+
+    area_mean = _vectorised(mod, obs, None, 1e-6, False, 3)
+    as_grid_ = _vectorised(mod[:, :, None, None, :], obs[:, None, None, :], None, 1e-6, False, 5)
+
+    assert np.array_equal(area_mean, as_grid_[:, :, 0, 0, :])
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+@pytest.mark.parametrize("vectorised, expected", [(True, "batched"), (False, "looped")])
+def test_area_mean_vectorised_flag_actually_dispatches(
+    monkeypatch, dispatch, area_mean, gridded, obs, mod, vectorised, expected
+):
+    import embcca.adjustment as adjustment
+
+    called = []
+    real_loop, real_batched = adjustment._area_mean_loop, adjustment._vectorised
+
+    def spy_loop(*args, **kwargs):
+        called.append("looped")
+        return real_loop(*args, **kwargs)
+
+    def spy_batched(*args, **kwargs):
+        called.append("batched")
+        return real_batched(*args, **kwargs)
+
+    monkeypatch.setattr(adjustment, "_area_mean_loop", spy_loop)
+    monkeypatch.setattr(adjustment, "_vectorised", spy_batched)
+
+    area_mean(mod, obs, vectorised=vectorised)
+
+    assert called == [expected]
+
+
+# ---------------------------------------------------------------------------
+# Masked arrays
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+@pytest.mark.parametrize("vectorised", [True, False])
+def test_masked_input_returns_a_plain_array(dispatch, area_mean, gridded, obs, mod, vectorised):
+    """`vectorised` selects an implementation; it must not change the return type."""
+    masked = np.ma.array(mod, mask=np.zeros(mod.shape, dtype=bool))
+    masked[:, 0, :] = np.ma.masked
+
+    result = dispatch(masked, obs, vectorised=vectorised)
+
+    assert not np.ma.isMaskedArray(result)
+    assert isinstance(result, np.ndarray)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_masked_entries_become_nan_rather_than_being_adjusted(
+    dispatch, area_mean, gridded, obs, mod
+):
+    """Masked data is missing data, not data to correct."""
+    masked = np.ma.array(mod, mask=np.zeros(mod.shape, dtype=bool))
+    masked[:, 0, :] = np.ma.masked
+
+    result = dispatch(masked, obs)
+
+    assert np.isnan(result[:, 0, :]).all()
+    assert np.isfinite(result[:, 1:, :]).all()
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_masked_input_matches_filling_with_nan_first(dispatch, area_mean, gridded, obs, mod):
+    """This is what the China analysis does for itself, via its own `_to_ndarray`."""
+    masked = np.ma.array(mod, mask=np.zeros(mod.shape, dtype=bool))
+    masked[:, 2, :] = np.ma.masked
+
+    from_mask = dispatch(masked, obs)
+    from_nan = dispatch(np.ma.filled(masked, np.nan), obs)
+
+    assert np.array_equal(np.isnan(from_mask), np.isnan(from_nan))
+    assert np.array_equal(from_mask[~np.isnan(from_mask)], from_nan[~np.isnan(from_nan)])
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_a_masked_array_with_nothing_masked_is_unaffected(
+    dispatch, area_mean, gridded, obs, mod
+):
+    """The Hunan analysis passes exactly this: a MaskedArray whose mask is all False.
+
+    Area-averaging over latitude and longitude drops any cell-level masking, so
+    the container survives but nothing in it is masked.
+    """
+    unmasked_container = np.ma.array(obs, mask=np.zeros(obs.shape, dtype=bool))
+
+    assert np.array_equal(dispatch(mod, unmasked_container), dispatch(mod, obs))
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+@pytest.mark.parametrize("vectorised", [True, False])
+def test_masked_observations_are_handled_too(
+    dispatch, area_mean, gridded, obs, mod, vectorised
+):
+    masked_obs = np.ma.array(obs, mask=np.zeros(obs.shape, dtype=bool))
+    masked_obs[:, 1] = np.ma.masked
+
+    result = dispatch(mod, masked_obs, vectorised=vectorised)
+
+    assert not np.ma.isMaskedArray(result)
+    assert np.isnan(result).all()
+
+
+def test_to_ndarray_passes_none_through():
+    """`mod_future` is handed to it unconditionally."""
+    from embcca.adjustment import _to_ndarray
+
+    assert _to_ndarray(None) is None
+    assert isinstance(_to_ndarray([[1.0, 2.0]]), np.ndarray)
