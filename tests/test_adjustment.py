@@ -317,7 +317,7 @@ def test_bias_adjust_forwards_eps_to_the_area_mean_form(obs, mod):
     )
 
 
-@pytest.mark.parametrize("ndim", [1, 2, 4, 6])
+@pytest.mark.parametrize("ndim", [1, 6, 7])
 def test_bias_adjust_rejects_unsupported_dimensions(ndim):
     shaped = np.ones((2,) * ndim)
 
@@ -423,7 +423,7 @@ def test_both_variants_dispatch_on_layout(dispatch, area_mean, gridded, obs, mod
 
 @pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
 def test_both_variants_reject_unsupported_dimensions(dispatch, area_mean, gridded):
-    shaped = np.ones((2,) * 4)
+    shaped = np.ones((2,) * 6)
 
     with pytest.raises(ValueError, match="Unsupported dimensions"):
         dispatch(shaped, shaped)
@@ -572,3 +572,80 @@ def test_a_future_differing_only_in_length_is_accepted(dispatch, area_mean, grid
     for n_years in (1, N_YEARS // 2, N_YEARS, N_YEARS * 2):
         future = np.zeros((n_years, N_MEMBERS, N_VARS))
         assert area_mean(mod, obs, future).shape == future.shape
+
+
+# ---------------------------------------------------------------------------
+# Input without an ensemble axis
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_two_dimensional_input_is_treated_as_one_member(
+    dispatch, area_mean, gridded, obs, mod
+):
+    """A single realisation is an ensemble of one, and must give the same answer."""
+    single = mod[:, 0, :]
+
+    without_axis = dispatch(single, obs)
+    with_axis = dispatch(single[:, None, :], obs)
+
+    assert without_axis.shape == single.shape
+    assert np.array_equal(without_axis, with_axis[:, 0, :])
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_four_dimensional_input_is_treated_as_one_member(
+    dispatch, area_mean, gridded, obs, mod
+):
+    grid_obs = as_grid(obs, ensemble=False)
+    single = as_grid(mod, ensemble=True)[:, 0, ...]
+
+    without_axis = dispatch(single, grid_obs)
+    with_axis = dispatch(single[:, None, ...], grid_obs)
+
+    assert without_axis.shape == single.shape
+    assert np.array_equal(without_axis, with_axis[:, 0, ...])
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_explicit_forms_also_accept_the_reduced_layout(
+    dispatch, area_mean, gridded, obs, mod
+):
+    """The workers behave the same whether reached directly or by dispatch."""
+    single = mod[:, 0, :]
+    grid_single = as_grid(mod, ensemble=True)[:, 0, ...]
+
+    assert np.array_equal(area_mean(single, obs), dispatch(single, obs))
+    assert np.array_equal(
+        gridded(grid_single, as_grid(obs, ensemble=False)),
+        dispatch(grid_single, as_grid(obs, ensemble=False)),
+    )
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_reduced_layout_accepts_mod_future(dispatch, area_mean, gridded, obs, mod):
+    single = mod[:, 0, :]
+    future = single[: N_YEARS // 2]
+
+    assert dispatch(single, obs, future).shape == future.shape
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_mod_future_must_match_the_reduced_layout_too(dispatch, area_mean, gridded, obs, mod):
+    single = mod[:, 0, :]
+    future_with_axis = mod[: N_YEARS // 2, :1, :]
+
+    with pytest.raises(ValueError, match="must have the same layout"):
+        dispatch(single, obs, future_with_axis)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_explicit_forms_reject_the_wrong_rank(dispatch, area_mean, gridded, obs, mod):
+    """Area-mean and gridded each accept exactly two ranks, and no others."""
+    grid_mod = as_grid(mod, ensemble=True)
+
+    with pytest.raises(ValueError, match="expected 3 with an ensemble axis"):
+        area_mean(grid_mod, as_grid(obs, ensemble=False))
+
+    with pytest.raises(ValueError, match="expected 5 with an ensemble axis"):
+        gridded(mod, obs)

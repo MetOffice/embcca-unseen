@@ -33,7 +33,8 @@ period's model mean and standard deviation. When it is omitted, the calibration
 data is adjusted in place.
 
 Each ensemble member is adjusted independently, and for gridded data each grid
-cell is adjusted independently as well.
+cell is adjusted independently as well. The ensemble axis may be omitted for a
+single realisation, in which case the result omits it too.
 """
 
 from __future__ import annotations
@@ -159,6 +160,48 @@ def _check_future(mod_calibration, mod_future):
         )
 
 
+def _add_ensemble_axis(mod_calibration, mod_future, ndim):
+    """Insert a length-1 ensemble axis when the caller did not supply one.
+
+    A single realisation is just an ensemble of one, so rather than duplicate
+    the transform for that case the arrays are reshaped into the ensemble
+    layout, adjusted unchanged, and reshaped back by :func:`_drop_ensemble_axis`.
+
+    Parameters
+    ----------
+    mod_calibration, mod_future : array
+        As passed by the caller. ``mod_future`` may be ``None``.
+    ndim : int
+        Rank of the ensemble layout this function expects: 3 for area-mean,
+        5 for gridded.
+
+    Returns
+    -------
+    mod_calibration, mod_future : array
+        Reshaped to ``ndim`` dimensions if an axis was inserted.
+    inserted : bool
+        Whether an axis was inserted, for :func:`_drop_ensemble_axis`.
+    """
+    if mod_calibration.ndim == ndim:
+        return mod_calibration, mod_future, False
+
+    if mod_calibration.ndim == ndim - 1:
+        mod_calibration = np.expand_dims(mod_calibration, 1)
+        if mod_future is not None:
+            mod_future = np.expand_dims(mod_future, 1)
+        return mod_calibration, mod_future, True
+
+    raise ValueError(
+        f"mod_calibration has {mod_calibration.ndim} dimensions; expected {ndim} "
+        f"with an ensemble axis, or {ndim - 1} without one."
+    )
+
+
+def _drop_ensemble_axis(mod_corrected, inserted):
+    """Undo :func:`_add_ensemble_axis`, so the result matches what was passed in."""
+    return mod_corrected[:, 0] if inserted else mod_corrected
+
+
 def bias_adjust_area_mean_unseen(mod_calibration: np.ndarray, obs_calibration: np.ndarray, mod_future: Optional[np.ndarray] = None, eps: float = 1e-6) -> np.ndarray:
     """Apply EMBCCA to area-mean (non-spatial) data, adjusting the mean only.
 
@@ -170,7 +213,8 @@ def bias_adjust_area_mean_unseen(mod_calibration: np.ndarray, obs_calibration: n
     ----------
     mod_calibration : array, shape (n_years, n_ensembles, n_vars)
         Model data for the calibration period. Each ensemble member is
-        adjusted independently.
+        adjusted independently. The ensemble axis may be omitted, giving
+        ``(n_years, n_vars)``, in which case the result omits it too.
     obs_calibration : array, shape (n_years, n_vars)
         Observed data for the calibration period, providing the target mean
         and correlation structure.
@@ -193,6 +237,7 @@ def bias_adjust_area_mean_unseen(mod_calibration: np.ndarray, obs_calibration: n
     bias_adjust_gridded_unseen : Gridded equivalent of this function.
     """
     _check_future(mod_calibration, mod_future)
+    mod_calibration, mod_future, inserted = _add_ensemble_axis(mod_calibration, mod_future, 3)
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 
     obs_st, obs_mean, _ = _standardise(obs_calibration, eps)
@@ -208,7 +253,7 @@ def bias_adjust_area_mean_unseen(mod_calibration: np.ndarray, obs_calibration: n
         aligned = _align(mod_st, mod_eigenvalues, mod_eigenvectors, obs_eigenvalues, obs_eigenvectors)
         mod_corrected[:, member, :] = aligned * mod_std + obs_mean
 
-    return mod_corrected
+    return _drop_ensemble_axis(mod_corrected, inserted)
 
 
 def bias_adjust_gridded_unseen(mod_calibration: np.ndarray, obs_calibration: np.ndarray, mod_future: Optional[np.ndarray] = None, eps: float = 1e-6) -> np.ndarray:
@@ -222,7 +267,9 @@ def bias_adjust_gridded_unseen(mod_calibration: np.ndarray, obs_calibration: np.
     ----------
     mod_calibration : array, shape (n_years, n_ensembles, n_lons, n_lats, n_vars)
         Model data for the calibration period. Each ensemble member is
-        adjusted independently at each grid cell.
+        adjusted independently at each grid cell. The ensemble axis may be
+        omitted, giving ``(n_years, n_lons, n_lats, n_vars)``, in which case
+        the result omits it too.
     obs_calibration : array, shape (n_years, n_lons, n_lats, n_vars)
         Observed data for the calibration period, providing the target mean
         and correlation structure.
@@ -246,6 +293,7 @@ def bias_adjust_gridded_unseen(mod_calibration: np.ndarray, obs_calibration: np.
     bias_adjust_area_mean_unseen : Area-mean equivalent of this function.
     """
     _check_future(mod_calibration, mod_future)
+    mod_calibration, mod_future, inserted = _add_ensemble_axis(mod_calibration, mod_future, 5)
     _, n_ensembles, n_lons, n_lats, _ = mod_calibration.shape
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 
@@ -264,7 +312,7 @@ def bias_adjust_gridded_unseen(mod_calibration: np.ndarray, obs_calibration: np.
                 aligned = _align(mod_st, mod_eigenvalues, mod_eigenvectors, obs_eigenvalues, obs_eigenvectors)
                 mod_corrected[:, member, ilon, ilat, :] = aligned * mod_std + obs_mean
 
-    return mod_corrected
+    return _drop_ensemble_axis(mod_corrected, inserted)
 
 
 def bias_adjust_area_mean(mod_calibration: np.ndarray, obs_calibration: np.ndarray, mod_future: Optional[np.ndarray] = None, eps: float = 1e-6) -> np.ndarray:
@@ -278,7 +326,8 @@ def bias_adjust_area_mean(mod_calibration: np.ndarray, obs_calibration: np.ndarr
     ----------
     mod_calibration : array, shape (n_years, n_ensembles, n_vars)
         Model data for the calibration period. Each ensemble member is
-        adjusted independently.
+        adjusted independently. The ensemble axis may be omitted, giving
+        ``(n_years, n_vars)``, in which case the result omits it too.
     obs_calibration : array, shape (n_years, n_vars)
         Observed data for the calibration period, providing the target mean,
         standard deviation and correlation structure.
@@ -302,6 +351,7 @@ def bias_adjust_area_mean(mod_calibration: np.ndarray, obs_calibration: np.ndarr
     bias_adjust_gridded : Gridded equivalent of this function.
     """
     _check_future(mod_calibration, mod_future)
+    mod_calibration, mod_future, inserted = _add_ensemble_axis(mod_calibration, mod_future, 3)
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 
     obs_st, obs_mean, obs_std = _standardise(obs_calibration, eps)
@@ -317,7 +367,7 @@ def bias_adjust_area_mean(mod_calibration: np.ndarray, obs_calibration: np.ndarr
         aligned = _align(mod_st, mod_eigenvalues, mod_eigenvectors, obs_eigenvalues, obs_eigenvectors)
         mod_corrected[:, member, :] = aligned * obs_std + obs_mean
 
-    return mod_corrected
+    return _drop_ensemble_axis(mod_corrected, inserted)
 
 
 
@@ -333,7 +383,9 @@ def bias_adjust_gridded(mod_calibration: np.ndarray, obs_calibration: np.ndarray
     ----------
     mod_calibration : array, shape (n_years, n_ensembles, n_lons, n_lats, n_vars)
         Model data for the calibration period. Each ensemble member is
-        adjusted independently at each grid cell.
+        adjusted independently at each grid cell. The ensemble axis may be
+        omitted, giving ``(n_years, n_lons, n_lats, n_vars)``, in which case
+        the result omits it too.
     obs_calibration : array, shape (n_years, n_lons, n_lats, n_vars)
         Observed data for the calibration period, providing the target mean,
         standard deviation and correlation structure.
@@ -357,6 +409,7 @@ def bias_adjust_gridded(mod_calibration: np.ndarray, obs_calibration: np.ndarray
     bias_adjust_area_mean : Area-mean equivalent of this function.
     """
     _check_future(mod_calibration, mod_future)
+    mod_calibration, mod_future, inserted = _add_ensemble_axis(mod_calibration, mod_future, 5)
     _, n_ensembles, n_lons, n_lats, _ = mod_calibration.shape
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 
@@ -375,7 +428,7 @@ def bias_adjust_gridded(mod_calibration: np.ndarray, obs_calibration: np.ndarray
                 aligned = _align(mod_st, mod_eigenvalues, mod_eigenvectors, obs_eigenvalues, obs_eigenvectors)
                 mod_corrected[:, member, ilon, ilat, :] = aligned * obs_std + obs_mean
 
-    return mod_corrected
+    return _drop_ensemble_axis(mod_corrected, inserted)
 
 
 def bias_adjust(mod_calibration: np.ndarray, obs_calibration: np.ndarray, mod_future: Optional[np.ndarray] = None, eps: float = 1e-6) -> np.ndarray:
@@ -386,6 +439,8 @@ def bias_adjust(mod_calibration: np.ndarray, obs_calibration: np.ndarray, mod_fu
     mod_calibration : array
         Either ``(n_years, n_ensembles, n_vars)`` for area-mean data or
         ``(n_years, n_ensembles, n_lons, n_lats, n_vars)`` for gridded data.
+        The ensemble axis may be omitted in either case, giving 2-D or 4-D
+        input for a single realisation; the result then omits it too.
     obs_calibration : array
         Correspondingly ``(n_years, n_vars)`` or
         ``(n_years, n_lons, n_lats, n_vars)``.
@@ -414,14 +469,15 @@ def bias_adjust(mod_calibration: np.ndarray, obs_calibration: np.ndarray, mod_fu
     affect the result.
     """
     ndim = np.ndim(mod_calibration)
-    if ndim == 3:
+    if ndim in (2, 3):
         return bias_adjust_area_mean(mod_calibration, obs_calibration, mod_future, eps)
-    if ndim == 5:
+    if ndim in (4, 5):
         return bias_adjust_gridded(mod_calibration, obs_calibration, mod_future, eps)
     raise ValueError(
         f"Unsupported dimensions: mod.ndim={ndim}. Expected 3 for area-mean "
         "(n_years, n_ensembles, n_vars) or 5 for gridded "
-        "(n_years, n_ensembles, n_lons, n_lats, n_vars) input."
+        "(n_years, n_ensembles, n_lons, n_lats, n_vars) input, or 2 and 4 "
+        "respectively for a single realisation with no ensemble axis."
     )
 
 
@@ -434,6 +490,8 @@ def bias_adjust_unseen(mod_calibration: np.ndarray, obs_calibration: np.ndarray,
     mod_calibration : array
         Either ``(n_years, n_ensembles, n_vars)`` for area-mean data or
         ``(n_years, n_ensembles, n_lons, n_lats, n_vars)`` for gridded data.
+        The ensemble axis may be omitted in either case, giving 2-D or 4-D
+        input for a single realisation; the result then omits it too.
     obs_calibration : array
         Correspondingly ``(n_years, n_vars)`` or
         ``(n_years, n_lons, n_lats, n_vars)``.
@@ -462,12 +520,13 @@ def bias_adjust_unseen(mod_calibration: np.ndarray, obs_calibration: np.ndarray,
     affect the result.
     """
     ndim = np.ndim(mod_calibration)
-    if ndim == 3:
+    if ndim in (2, 3):
         return bias_adjust_area_mean_unseen(mod_calibration, obs_calibration, mod_future, eps)
-    if ndim == 5:
+    if ndim in (4, 5):
         return bias_adjust_gridded_unseen(mod_calibration, obs_calibration, mod_future, eps)
     raise ValueError(
         f"Unsupported dimensions: mod.ndim={ndim}. Expected 3 for area-mean "
         "(n_years, n_ensembles, n_vars) or 5 for gridded "
-        "(n_years, n_ensembles, n_lons, n_lats, n_vars) input."
+        "(n_years, n_ensembles, n_lons, n_lats, n_vars) input, or 2 and 4 "
+        "respectively for a single realisation with no ensemble axis."
     )

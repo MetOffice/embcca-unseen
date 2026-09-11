@@ -96,12 +96,11 @@ All six take the same arguments:
 f(mod_calibration, obs_calibration, mod_future=None, eps=1e-6)
 ```
 
-The dispatchers pick the area-mean form for 3-D input and the gridded form for
-5-D, and raise `ValueError` for anything else. They forward `mod_future` and
-`eps` unchanged, so `bias_adjust_unseen(mod, obs)` and
-`bias_adjust_area_mean_unseen(mod, obs)` return exactly the same array for 3-D
-input. Use the dispatchers unless you want the shape requirement enforced by
-the function name.
+The dispatchers pick the area-mean form for 2-D or 3-D input and the gridded
+form for 4-D or 5-D, and raise `ValueError` for anything else. They forward
+`mod_future` and `eps` unchanged, so `bias_adjust_unseen(mod, obs)` and
+`bias_adjust_area_mean_unseen(mod, obs)` return exactly the same array. Use the
+dispatchers unless you want the layout enforced by the function name.
 
 ## Array layouts
 
@@ -131,6 +130,11 @@ Three things to note:
   a convention, not a requirement.
 - **`n_vars` can be any number**, not just two. The method generalises to any
   number of jointly adjusted variables.
+- **The ensemble axis is optional.** A single realisation can be passed
+  without it, as `(n_years, n_vars)` or `(n_years, n_lons, n_lats, n_vars)`.
+  It is treated as an ensemble of one and the result omits the axis too, so
+  the shape you pass is the shape you get back. `mod_future` must use the same
+  layout as `mod_calibration`.
 
 The result always has the same shape and dtype as the array that was adjusted.
 
@@ -273,7 +277,8 @@ uses.
 
 | Symptom | Cause |
 |---|---|
-| `ValueError: Unsupported dimensions: mod.ndim=4` | The dispatchers accept 3-D or 5-D model input only. Gridded input needs both spatial axes, even if one is length 1. |
+| `ValueError: Unsupported dimensions` | The dispatchers accept 2-D or 3-D (area-mean) and 4-D or 5-D (gridded) model input. Gridded input needs both spatial axes, even if one is length 1. |
+| `ValueError: expected 5 with an ensemble axis, or 4 without one` | An explicit form was given the other layout's rank, e.g. area-mean data passed to `bias_adjust_gridded`. Use the dispatcher, or the matching function. |
 | `ValueError: Only the leading time axis may differ` | `mod_future` disagrees with `mod_calibration` somewhere other than time. See [Adjusting a different period](#adjusting-a-different-period). |
 | Any other `ValueError`, `IndexError`, or `matmul` dimension error | Some array does not match the expected layout. Check every axis of all three arrays against [Array layouts](#array-layouts), rather than assuming the reported axis is the one at fault: the error usually surfaces at whichever operation happens to reach the mismatch first. |
 | All-NaN output | The input block contained NaN. A constant variable does *not* cause this; `eps` keeps it finite. See [Missing data](#missing-data). |
