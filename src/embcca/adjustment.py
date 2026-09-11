@@ -130,6 +130,35 @@ def _align(mod_st, mod_eigenvalues, mod_eigenvectors, obs_eigenvalues, obs_eigen
 
 
 
+def _check_future(mod_calibration, mod_future):
+    """Reject a ``mod_future`` that does not line up with the calibration data.
+
+    Only the leading time axis may differ: the transform is derived per
+    ensemble member (and per grid cell), so every other axis has to match for
+    the calibration to apply. Without this check a ``mod_future`` carrying more
+    ensemble members than ``mod_calibration`` would return silently, with the
+    surplus members never written and left holding whatever the output buffer
+    was allocated over.
+    """
+    if mod_future is None:
+        return
+
+    if mod_future.ndim != mod_calibration.ndim:
+        raise ValueError(
+            f"mod_future has {mod_future.ndim} dimensions but mod_calibration has "
+            f"{mod_calibration.ndim}. They must have the same layout, differing "
+            "only in the length of the leading time axis."
+        )
+
+    if mod_future.shape[1:] != mod_calibration.shape[1:]:
+        raise ValueError(
+            f"mod_future has shape {mod_future.shape} but mod_calibration has "
+            f"{mod_calibration.shape}. Only the leading time axis may differ; "
+            f"got {mod_future.shape[1:]} against {mod_calibration.shape[1:]} "
+            "for the remaining axes."
+        )
+
+
 def bias_adjust_area_mean_unseen(mod_calibration: np.ndarray, obs_calibration: np.ndarray, mod_future: Optional[np.ndarray] = None, eps: float = 1e-6) -> np.ndarray:
     """Apply EMBCCA to area-mean (non-spatial) data, adjusting the mean only.
 
@@ -170,6 +199,7 @@ def bias_adjust_area_mean_unseen(mod_calibration: np.ndarray, obs_calibration: n
     ``eps`` floor to standard deviations as well, since an all-sea or otherwise
     constant grid cell makes that a realistic possibility.
     """
+    _check_future(mod_calibration, mod_future)
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 
     obs_st, obs_mean, _ = _standardise(obs_calibration)
@@ -222,6 +252,7 @@ def bias_adjust_gridded_unseen(mod_calibration: np.ndarray, obs_calibration: np.
     bias_adjust_gridded : Same layout, adjusting the standard deviation too.
     bias_adjust_area_mean_unseen : Area-mean equivalent of this function.
     """
+    _check_future(mod_calibration, mod_future)
     _, n_ensembles, n_lons, n_lats, _ = mod_calibration.shape
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 
@@ -283,6 +314,7 @@ def bias_adjust_area_mean(mod_calibration: np.ndarray, obs_calibration: np.ndarr
     across time will divide by zero. :func:`bias_adjust_gridded` applies the ``eps``
     floor to standard deviations as well.
     """
+    _check_future(mod_calibration, mod_future)
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 
     obs_st, obs_mean, obs_std = _standardise(obs_calibration)
@@ -337,6 +369,7 @@ def bias_adjust_gridded(mod_calibration: np.ndarray, obs_calibration: np.ndarray
     bias_adjust_gridded_unseen : Same layout, keeping the model's standard deviation.
     bias_adjust_area_mean : Area-mean equivalent of this function.
     """
+    _check_future(mod_calibration, mod_future)
     _, n_ensembles, n_lons, n_lats, _ = mod_calibration.shape
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 

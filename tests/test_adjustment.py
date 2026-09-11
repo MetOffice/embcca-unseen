@@ -514,3 +514,61 @@ def test_future_inputs_are_not_modified(dispatch, area_mean, gridded, obs, mod):
     area_mean(mod, obs, future)
 
     assert np.array_equal(future, before)
+
+
+# ---------------------------------------------------------------------------
+# mod_future shape validation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+@pytest.mark.parametrize("n_future_members", [N_MEMBERS + 2, N_MEMBERS - 2])
+def test_future_with_wrong_member_count_is_rejected(
+    dispatch, area_mean, gridded, obs, mod, n_future_members
+):
+    """Too many members used to return uninitialised memory silently."""
+    future = np.zeros((N_YEARS // 2, n_future_members, N_VARS))
+
+    with pytest.raises(ValueError, match="Only the leading time axis may differ"):
+        area_mean(mod, obs, future)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_future_with_wrong_variable_count_is_rejected(dispatch, area_mean, gridded, obs, mod):
+    future = np.zeros((N_YEARS, N_MEMBERS, N_VARS + 1))
+
+    with pytest.raises(ValueError, match="Only the leading time axis may differ"):
+        area_mean(mod, obs, future)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_future_with_wrong_rank_is_rejected(dispatch, area_mean, gridded, obs, mod):
+    future = np.zeros((N_YEARS, N_MEMBERS, 1, 1, N_VARS))
+
+    with pytest.raises(ValueError, match="must have the same layout"):
+        area_mean(mod, obs, future)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_gridded_future_with_wrong_grid_is_rejected(dispatch, area_mean, gridded, obs, mod):
+    grid_mod, grid_obs = as_grid(mod, ensemble=True), as_grid(obs, ensemble=False)
+    future = np.zeros((N_YEARS, N_MEMBERS, 1, 3, N_VARS))
+
+    with pytest.raises(ValueError, match="Only the leading time axis may differ"):
+        gridded(grid_mod, grid_obs, future)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_dispatchers_reject_a_mismatched_future_too(dispatch, area_mean, gridded, obs, mod):
+    future = np.zeros((N_YEARS, N_MEMBERS + 1, N_VARS))
+
+    with pytest.raises(ValueError, match="Only the leading time axis may differ"):
+        dispatch(mod, obs, future)
+
+
+@pytest.mark.parametrize("dispatch, area_mean, gridded", VARIANTS)
+def test_a_future_differing_only_in_length_is_accepted(dispatch, area_mean, gridded, obs, mod):
+    """The guard must not reject the case it exists to support."""
+    for n_years in (1, N_YEARS // 2, N_YEARS, N_YEARS * 2):
+        future = np.zeros((n_years, N_MEMBERS, N_VARS))
+        assert area_mean(mod, obs, future).shape == future.shape

@@ -134,6 +134,26 @@ Three things to note:
 
 The result always has the same shape and dtype as the array that was adjusted.
 
+> **`obs_calibration` is only partly checked.** `mod_future` is validated
+> against `mod_calibration` on every axis, but the observations are not, and
+> two mismatches pass silently rather than raising:
+>
+> - an observation grid **larger** than the model grid is indexed over the
+>   model's ranges, so only its leading corner is used and the rest is
+>   discarded;
+> - a different number of years is accepted, because each block is
+>   standardised over its own time axis.
+>
+> A *smaller* observation grid raises `IndexError`, and a different number of
+> variables raises `ValueError`. If your observations are not already on the
+> model grid by construction, assert it yourself:
+>
+> ```python
+> assert obs.shape[1:-1] == mod.shape[2:-1]   # gridded: spatial axes agree
+> assert obs.shape[0] == mod.shape[0]         # same number of years
+> assert obs.shape[-1] == mod.shape[-1]       # same variables
+> ```
+
 To go from gridded to area-mean, average the spatial axes first:
 
 ```python
@@ -186,12 +206,9 @@ bias_adjust(mod_calibration, obs_calibration, mod_future).shape
 Passing `mod_calibration` itself as `mod_future` gives exactly the same result
 as omitting the argument.
 
-> **The two arrays must agree on every axis except time, and this is not
-> checked.** A mismatched variable axis raises `ValueError`, and a `mod_future`
-> with *fewer* ensemble members raises `IndexError`, but a `mod_future` with
-> *more* members returns silently, with the extra members filled from
-> uninitialised memory rather than adjusted. Check the shapes yourself before
-> calling if they are not fixed by construction.
+The two arrays must agree on every axis except time. Any other disagreement,
+including a different number of ensemble members, grid cells, variables or
+dimensions, raises `ValueError` before any adjustment is attempted.
 
 ## Missing data
 
@@ -255,10 +272,11 @@ uses.
 | Symptom | Cause |
 |---|---|
 | `ValueError: Unsupported dimensions: mod.ndim=4` | The dispatchers accept 3-D or 5-D model input only. Gridded input needs both spatial axes, even if one is length 1. |
-| `IndexError` or nonsense values with `mod_future` | `mod_future` disagrees with `mod_calibration` on the ensemble axis. See [Adjusting a different period](#adjusting-a-different-period). |
-| `ValueError: operands could not be broadcast together` | `mod_future` and `mod_calibration` have different numbers of variables. |
+| `ValueError: Only the leading time axis may differ` | `mod_future` disagrees with `mod_calibration` somewhere other than time. See [Adjusting a different period](#adjusting-a-different-period). |
+| Any other `ValueError`, `IndexError`, or `matmul` dimension error | Some array does not match the expected layout. Check every axis of all three arrays against [Array layouts](#array-layouts), rather than assuming the reported axis is the one at fault: the error usually surfaces at whichever operation happens to reach the mismatch first. |
 | All-NaN output | The input block contained NaN, or a variable had zero variance in an area-mean call. See [Missing data](#missing-data). |
 | Corrected correlation does not match the observations | Check the variable axis is last and time is first. A transposed array is adjusted without complaint. |
+| Output looks plausible but wrong, with no error | Most likely an `obs_calibration` mismatch, which is only partly checked. See the warning under [Array layouts](#array-layouts). |
 | Results differ between two runs of the same script | Check the input dtype is the same in both. See [Numerical notes](#numerical-notes). |
 | Adjusted spread looks wrong | You may want the other variant. See [The two variants](#the-two-variants). |
 
