@@ -179,8 +179,8 @@ def bias_adjust_area_mean_unseen(mod_calibration: np.ndarray, obs_calibration: n
         standardised with the calibration period's model mean and standard
         deviation. If omitted, ``mod_calibration`` is adjusted in place.
     eps : float, optional
-        Floor applied to the eigenvalues, keeping them strictly positive so
-        that the inverse square root is well defined.
+        Floor applied to standard deviations and eigenvalues, to avoid
+        division by zero.
 
     Returns
     -------
@@ -191,22 +191,15 @@ def bias_adjust_area_mean_unseen(mod_calibration: np.ndarray, obs_calibration: n
     --------
     bias_adjust_area_mean : Same layout, adjusting the standard deviation too.
     bias_adjust_gridded_unseen : Gridded equivalent of this function.
-
-    Notes
-    -----
-    Standard deviations are not floored here, so a variable with zero variance
-    across time will divide by zero. :func:`bias_adjust_gridded_unseen` applies the
-    ``eps`` floor to standard deviations as well, since an all-sea or otherwise
-    constant grid cell makes that a realistic possibility.
     """
     _check_future(mod_calibration, mod_future)
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 
-    obs_st, obs_mean, _ = _standardise(obs_calibration)
+    obs_st, obs_mean, _ = _standardise(obs_calibration, eps)
     obs_eigenvalues, obs_eigenvectors = _covariance_eigen(obs_st, eps)
 
     for member in range(mod_calibration.shape[1]):
-        mod_st, mod_mean, mod_std = _standardise(mod_calibration[:, member, :])
+        mod_st, mod_mean, mod_std = _standardise(mod_calibration[:, member, :], eps)
         mod_eigenvalues, mod_eigenvectors = _covariance_eigen(mod_st, eps)
         if mod_future is not None:
             future_mod_st = (mod_future[:, member, :] - mod_mean) / mod_std
@@ -294,8 +287,8 @@ def bias_adjust_area_mean(mod_calibration: np.ndarray, obs_calibration: np.ndarr
         standardised with the calibration period's model mean and standard
         deviation. If omitted, ``mod_calibration`` is adjusted in place.
     eps : float, optional
-        Floor applied to the eigenvalues, keeping them strictly positive so
-        that the inverse square root is well defined.
+        Floor applied to standard deviations and eigenvalues, to avoid
+        division by zero.
 
     Returns
     -------
@@ -307,21 +300,15 @@ def bias_adjust_area_mean(mod_calibration: np.ndarray, obs_calibration: np.ndarr
     --------
     bias_adjust_area_mean_unseen : Same layout, keeping the model's standard deviation.
     bias_adjust_gridded : Gridded equivalent of this function.
-
-    Notes
-    -----
-    Standard deviations are not floored here, so a variable with zero variance
-    across time will divide by zero. :func:`bias_adjust_gridded` applies the ``eps``
-    floor to standard deviations as well.
     """
     _check_future(mod_calibration, mod_future)
     mod_corrected = np.empty_like(mod_calibration if mod_future is None else mod_future)
 
-    obs_st, obs_mean, obs_std = _standardise(obs_calibration)
+    obs_st, obs_mean, obs_std = _standardise(obs_calibration, eps)
     obs_eigenvalues, obs_eigenvectors = _covariance_eigen(obs_st, eps)
 
     for member in range(mod_calibration.shape[1]):
-        mod_st, mod_mean, mod_std = _standardise(mod_calibration[:, member, :])
+        mod_st, mod_mean, mod_std = _standardise(mod_calibration[:, member, :], eps)
         mod_eigenvalues, mod_eigenvectors = _covariance_eigen(mod_st, eps)
         if mod_future is not None:
             future_mod_st = (mod_future[:, member, :] - mod_mean) / mod_std

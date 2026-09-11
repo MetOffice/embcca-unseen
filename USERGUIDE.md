@@ -224,12 +224,14 @@ unmasked land cell, it just produces nothing. If you are adjusting a large domai
 is mostly missing, consider subsetting to the valid cells first.
 
 `eps` guards against a variable with no variance across time, which would
-otherwise divide by zero. **The two forms differ here**: the gridded functions
-apply the floor to standard deviations as well as eigenvalues, while the
-area-mean functions apply it only to eigenvalues. So a constant variable
-yields NaN from `bias_adjust_area_mean_unseen` but finite values from
-`bias_adjust_gridded_unseen`. If a constant series is possible in your data,
-use the gridded form, or screen for it first.
+otherwise divide by zero. It floors standard deviations and eigenvalues alike,
+identically in all six functions.
+
+A constant variable therefore stays finite rather than producing NaN, and
+comes back at the observed mean. That matters because the variables are
+adjusted jointly: without the floor, one constant variable divides by zero and
+takes the whole block with it, including variables that were perfectly well
+behaved.
 
 ## Numerical notes
 
@@ -274,7 +276,7 @@ uses.
 | `ValueError: Unsupported dimensions: mod.ndim=4` | The dispatchers accept 3-D or 5-D model input only. Gridded input needs both spatial axes, even if one is length 1. |
 | `ValueError: Only the leading time axis may differ` | `mod_future` disagrees with `mod_calibration` somewhere other than time. See [Adjusting a different period](#adjusting-a-different-period). |
 | Any other `ValueError`, `IndexError`, or `matmul` dimension error | Some array does not match the expected layout. Check every axis of all three arrays against [Array layouts](#array-layouts), rather than assuming the reported axis is the one at fault: the error usually surfaces at whichever operation happens to reach the mismatch first. |
-| All-NaN output | The input block contained NaN, or a variable had zero variance in an area-mean call. See [Missing data](#missing-data). |
+| All-NaN output | The input block contained NaN. A constant variable does *not* cause this; `eps` keeps it finite. See [Missing data](#missing-data). |
 | Corrected correlation does not match the observations | Check the variable axis is last and time is first. A transposed array is adjusted without complaint. |
 | Output looks plausible but wrong, with no error | Most likely an `obs_calibration` mismatch, which is only partly checked. See the warning under [Array layouts](#array-layouts). |
 | Results differ between two runs of the same script | Check the input dtype is the same in both. See [Numerical notes](#numerical-notes). |
