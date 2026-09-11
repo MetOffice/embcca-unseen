@@ -1,25 +1,35 @@
-
+# Environment for the manuscript analyses in paper/.
+#
+# The embcca-unseen package itself needs only NumPy and installs with pip on
+# any platform; everything here is for the analyses and their comparison
+# methods. After creating this environment, run `pip install -e .` to add the
+# package itself.
 name: embcca-unseen
 channels:
   - conda-forge
 dependencies:
   - python=3.12.10
-  - numpy
-  - scipy
-  - matplotlib
-  - seaborn
-  - scikit-learn
-  - netcdf4
-  - cftime
-  - pandas
-  - cartopy
-  - shapely
-  - pyproj
-  - geos
-  - proj
-  - scitools-iris
-  - eigen          
-  - pybind11       
+  - numpy=2.5.3
+  # Must stay below 1.18. scipy 1.18 changed stats.rankdata to return float64
+  # for every method; SBCK 1.4.2 uses that result directly as an array index,
+  # so MRec and R2D2 both raise IndexError on scipy >= 1.18. dOTC is unaffected.
+  - scipy=1.17.1
+  - matplotlib=3.10.9
+  - seaborn=0.13.2
+  - scikit-learn=1.9.0
+  - netcdf4=1.7.4
+  - cftime=1.6.5
+  - pandas=3.0.5
+  - cartopy=0.25.0
+  - shapely=2.1.2
+  - pyproj=3.7.2
+  - geos=3.14.1
+  - proj=9.7.1
+  - scitools-iris=3.16.0
+  # eigen and pybind11 are build-time requirements for SBCK, which has no
+  # Linux or Windows wheel and is compiled from source during the pip step.
+  - eigen=5.0.1
+  - pybind11=3.1.0
   - pip
   - pip:
       - SBCK==1.4.2

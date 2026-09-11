@@ -51,6 +51,9 @@ DATA_PATH = Path(DATA_DIR)
 # --- SBCK imports (REMOVED MBCn) ---
 from SBCK import QDM, CDFt, R2D2, dOTC, MRec
 
+# EMBCCA bias adjustment (pip install embcca-unseen)
+import embcca
+
 # import functions
 from fidelity_test_cube import FidelityTestCube
 ftc = FidelityTestCube()
@@ -370,34 +373,7 @@ def plot_scatter_sixpanel(obs_combined, mod_raw, meancor_combined,
 
 ## Bias Correction: Yiweh's method ##
 # correct mean and correlation, preserve the variance
-def multi_correction_eigen_per_ensemble(mod, obs):
-    n_years, n_ensembles, n_vars = mod.shape
-    mod_corrected = np.empty_like(mod)
-    obs_mean = np.mean(obs, axis=0)
-    obs_std = np.std(obs, axis=0)
-    obs_st = (obs - obs_mean) / obs_std
-    Covariance_obs = np.cov(obs_st, rowvar=False)
-    eigenvalues_obs, W = np.linalg.eigh(Covariance_obs)
-    eigenvalues_obs = np.maximum(eigenvalues_obs, 1e-6)
-
-    for i in range(n_ensembles):
-        mod_mean = np.mean(mod[:, i, :], axis=0)
-        mod_std = np.std(mod[:, i, :], axis=0)
-        mod_st = (mod[:, i, :] - mod_mean) / mod_std
-        Covariance_mod = np.cov(mod_st, rowvar=False)
-        eigenvalues_mod, V = np.linalg.eigh(Covariance_mod)
-        eigenvalues_mod = np.maximum(eigenvalues_mod, 1e-6)
-        Gamma_inv_sqrt = np.diag(1.0 / np.sqrt(eigenvalues_mod))
-        Lambda_sqrt = np.diag(np.sqrt(eigenvalues_obs))
-
-        Zm = np.einsum('ij,jk->ik', mod_st, V)                 # mod_st * V
-        Zm = np.einsum('ik,kl->il', Zm, Gamma_inv_sqrt)        # * Gamma^-1/2
-        Zm = np.einsum('il,lm->im', Zm, Lambda_sqrt)           # * Lambda^1/2
-        Zm = np.einsum('im,mn->in', Zm, W.T)                   # * W^T
-        mod_corrected[:, i, :] = Zm * mod_std + obs_mean
-    return mod_corrected
-
-mod_corrected_eigen = multi_correction_eigen_per_ensemble(mod_raw, obs_combined)
+mod_corrected_eigen = embcca.bias_adjust_unseen(mod_raw, obs_combined, vectorised=False)
 
 
 ## Comparison with other multivariate bias-adjustment methods using SBCK tool ##
@@ -425,7 +401,7 @@ def apply_sbck_to_ensemble(obs, model_ensemble, bc_type, idx_train, idx_test):
     corrected = np.empty_like(X_test)
 
     if bc_type == 'EMBCCA-UNSEEN':
-        corrected = multi_correction_eigen_per_ensemble(X_test, obs)
+        corrected = embcca.bias_adjust_unseen(X_test, obs, vectorised=False)
     else:
         for i in range(n_ensembles):
             Y0 = np.asarray(obs)
