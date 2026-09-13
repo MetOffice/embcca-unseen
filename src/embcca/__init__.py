@@ -55,7 +55,7 @@ from embcca.adjustment import (
     bias_adjust_unseen,
 )
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "bias_adjust",

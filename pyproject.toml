@@ -25,6 +25,7 @@ authors = [
     { name = "Catherine D. Bradshaw" },
     { name = "Jemma C. S. Davie" },
     { name = "Thomas Crocker" },
+    { name = "Laurence Bradshaw" },
 ]
 classifiers = [
     "Development Status :: 5 - Production/Stable",
