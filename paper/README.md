@@ -7,11 +7,16 @@ The two analyses from:
 > *A new fast multivariate bias correction technique: a case study for compound
 > events in Hunan Province, China, using the UNSEEN approach*
 
-| File | Analysis |
+| File | Purpose |
 |---|---|
-| `Multi-DePreSys4-Paper-area_avg_final_multiscatter.py` | Hunan Province, area-mean. |
-| `Multi-DePreSys4-Paper-area_full_final_China.py` | China-wide spatial analysis. |
-| `fidelity_test_cube.py` | Helper module for UNSEEN-style fidelity testing, imported by both scripts. |
+| `Multi-DePreSys4-Paper-area_avg_final_multiscatter.py` | Hunan Province area-mean analysis used for the main manuscript results. |
+| `Multi-DePreSys4-Paper-area_full_final_China.py` | China-wide spatial analysis used for correlation-map and computational-cost comparisons. |
+| `prepare_depresys4_data_for_EMBCCA-UNSEEN.py` | Extracts seasonal DePreSys4 temperature or precipitation from CMIP6 DCPP archives and writes manuscript-ready NetCDF files. |
+| `prepare_era5-land_data_for_EMBCCA-UNSEEN.py` | Extracts seasonal ERA5-Land temperature or precipitation and writes manuscript-ready NetCDF files. |
+| `regrid_obs_to_depresys_grid.py` | Regrids ERA5-Land observations onto the DePreSys4 grid for gridded China analyses. |
+| `fidelity_test_cube.py` | Helper module for UNSEEN-style fidelity testing, imported by the analysis scripts. |
+
+The preprocessing scripts listed above can be used to regenerate the manuscript input datasets from the publicly available source data.
 
 Both scripts apply the bias adjustment by calling `embcca.bias_adjust_unseen`
 from the `embcca-unseen` package. That is the variant which keeps the model's
@@ -38,10 +43,6 @@ inside an active conda environment. Activate the environment before installing
 anything with pip, or that lookup will fail.
 
 ## Input data
-
-Not committed; available on reasonable request. Both scripts read NetCDF from
-`DATA_DIR`.
-
 **Model (DePreSys4)**, one file each for temperature and precipitation:
 dimensions `(year, realisation, leadtime, latitude, longitude)`, with
 realisation × leadtime collapsed to the ensemble axis at load time.
@@ -50,10 +51,23 @@ Variables: `mean_jja_temperature`, `total_jja_precipitation`.
 **Observations (ERA5-Land)**: dimensions `(year, latitude, longitude)`.
 Variables: `t2m`, `tp`.
 
-The China script needs observations **already regridded onto the model grid**,
-which is what the `_regridded` suffix in its default filenames refers to, because
-it stacks obs and model per grid cell. The Hunan script averages over latitude
-and longitude first, so its inputs do not need to share a grid.
+The gridded China analysis requires ERA5-Land observations to be regridded onto the DePreSys4 grid before bias adjustment. The script `regrid_obs_to_depresys_grid.py` performs this step.
+
+The area-mean Hunan analysis averages over latitude and longitude before bias adjustment and therefore does not require the observations and model data to share the same grid.
+
+## Workflow overview
+
+The manuscript analyses depend on processed NetCDF inputs.
+
+To fully reproduce the workflow:
+
+1. Download DePreSys4 data from the CEDA archive.
+2. Download ERA5-Land data from the Copernicus Climate Data Store.
+3. Run:
+   * `prepare_depresys4_data_for_EMBCCA-UNSEEN.py`
+   * `prepare_era5-land_data_for_EMBCCA-UNSEEN.py`
+   * `regrid_obs_to_depresys_grid.py`
+4. Run the manuscript analysis scripts.
 
 ## How to run
 
@@ -117,13 +131,7 @@ Produces:
 
 * Spatial correlation maps
 * Correlation anomaly maps
-* Calculation of time taken for each multivariate bias adjustment method to be applied across China
-
-Outputs saved in:
-
-```
-OUTDIR/China/
-```
+* Calculation of computational cost for each multivariate bias adjustment method to be applied across China
 
 \---
 
@@ -158,42 +166,10 @@ This table helps reproduce key figures from the paper.
 
 \---
 
-## Data requirements
-
-This repository does **not** include data. Data can be provided on request in .nc format.
-
-You need:
-
-### Hunan (area-mean)
-
-* DePreSys4 JJA temperature + precipitation
-* ERA5-Land JJA temperature + precipitation
-
-### China (gridded)
-
-* Regridded ERA5-Land
-* DePreSys4 gridded output
-
-### Expected variable names
-
-|Variable|Name|
-|-|-|
-|Model temperature|`mean_jja_temperature`|
-|Model precipitation|`total_jja_precipitation`|
-|Obs temperature|`t2m`|
-|Obs precipitation|`tp`|
-
-\---
-
 ## Reproducibility
 
-* Seeds are used for bootstrapping during SFC testing, during SVM resampling, and when splitting the data into training and testing, so that results are reproducible.
-
-Analysis period:
-
-```
-1992–2021 (30 years)
-```
+All stochastic elements (bootstrap resampling, SVM testing, and ensemble
+splitting) use fixed random seeds so results are reproducible.
 
 \---
 
@@ -211,17 +187,46 @@ Switch to `"Qt5Agg"` only for interactive use.
 
 ## Code and data availability
 
-* Data: DePreSys data available from CEDA (https://data.ceda.ac.uk/badc/cmip6/data/CMIP6/DCPP/MOHC/HadGEM3-GC31-MM/dcppA-hindcast for data up to 2018 and https://data.ceda.ac.uk/badc/cmip6/data/CMIP6/DCPP/MOHC/HadGEM3-GC31-MM/dcppB-forecast for data from 2019-2024). Shapefiles for country and administrative boundaries available from Natural Earth (https://www.naturalearthdata.com/downloads/)
-* Code: provided in this repository
+### Code
 
+The EMBCCA-UNSEEN package, manuscript analysis scripts, preprocessing workflows,
+and example datasets are provided in this repository.
+
+### Source data
+
+The underlying model data are from the Met Office DePreSys4 decadal prediction
+system and are available through the CEDA CMIP6 archive:
+
+* dcppA-hindcast (available up to 2018):
+  https://data.ceda.ac.uk/badc/cmip6/data/CMIP6/DCPP/MOHC/HadGEM3-GC31-MM/dcppA-hindcast
+
+* dcppB-forecast (available from 2019 onwards):
+  https://data.ceda.ac.uk/badc/cmip6/data/CMIP6/DCPP/MOHC/HadGEM3-GC31-MM/dcppB-forecast
+
+ERA5-Land observational data are available from the Copernicus Climate Data Store:
+
+* https://cds.climate.copernicus.eu/
+
+Country and administrative boundary shapefiles are available from Natural Earth:
+
+* https://www.naturalearthdata.com/downloads/
+
+The preprocessing scripts listed in the repository overview can be used to
+recreate the manuscript input datasets from these source data.
 \---
 ## Outputs
 
-Figure directories are created as needed.
+Figure directories are created automatically.
 
-Hunan, under `OUTDIR`: `Line_plots/`, `Scatter_plots/`,
-`Statistical_Comparison/`, `SVM_Comparison/`, `Exceedance_Comparison/`,
-`Fidelity_Testing/`.
+Hunan outputs:
+* Line_plots/
+* Scatter_plots/
+* Statistical_Comparison/
+* SVM_Comparison/
+* Exceedance_Comparison/
+* Fidelity_Testing/
 
-China, under `OUTDIR`: `Maps/` (mean maps, correlation maps, and
-correlation-difference maps). Method timings are printed to stdout, not saved.
+China outputs:
+* Maps/
+
+Method timings for the China workflow are printed to stdout.

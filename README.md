@@ -1,7 +1,9 @@
 (C) Crown Copyright, Met Office. All rights reserved.
 See LICENCE in the root of the repository for full licensing details.
-# EMBCCA
-# A new fast multivariate bias correction technique: a case study for compound events in Hunan Province, China, using the UNSEEN approach
+# EMBCCA-UNSEEN
+
+A fast multivariate bias-adjustment method for UNSEEN climate-risk analyses.
+
 
 This repository contains two things:
 
@@ -34,7 +36,7 @@ Those analyses apply the **EMBCCA‑UNSEEN** bias correction method to DePreSys4
 → Reproduces main manuscript figures
 * `paper/Multi-DePreSys4-Paper-area_full_final_China.py`  
 → China-wide spatial analysis  
-→ Produces correlation maps and comparison of time taken for the different multivariate methods when applied China-wide
+→ Produces correlation maps and compares computational cost across multivariate bias-adjustment methods when applied China-wide
 * `paper/fidelity_test_cube.py`  
 → Helper module for UNSEEN-style fidelity testing
 * `tests/`  
@@ -56,19 +58,21 @@ The bias-adjustment method needs only NumPy and installs with pip on any platfor
 pip install -e .
 ```
 
-After installation the user has the choice between bias adjustment with EMBCCA (adjust mean and standard deviation of the distribution) or EMBCCA-UNSEEN (only adjust the mean). The bias adjustment can be appled to a numpy array grid of latitudes and longitudes or on an area average. See `USERGUIDE.md` for full details.
+The package provides two related methods:
 
+* `bias_adjust` (EMBCCA) adjusts the mean, standard deviation and correlation structure to match the observations.
+* `bias_adjust_unseen` (EMBCCA-UNSEEN) adjusts the mean and correlation structure while preserving the model's own standard deviation. This is the version used for UNSEEN applications.
 To see it applied to the sample data in `example-data/`:
 
 ```bash
 python examples/example.py
 ```
 
-That script corrects a small 2x2 grid in both the gridded and the area-mean form, and reports the mean, correlation and variance before and after. See `example-data/README.md` for the array layouts it expects.
+This script corrects a small 2x2 grid in both the gridded and the area-mean form, and reports the mean, correlation and variance before and after. See `example-data/README.md` for the array layouts it expects.
 
 ### The manuscript analyses
 
-The analyses in `paper/` need considerably more. Due to the SBCK dependency, use the conda environment for those:
+The analyses in `paper/` depends on further packages. Use the conda environment:
 
 ```bash
 conda env create -f environment.yml
@@ -87,9 +91,10 @@ Tested with:
 
 ## Citation
 
-Please cite:
+If you use this software, please cite:
 
-* The associated manuscript
+* the associated manuscript
+* the software release described in `CITATION.cff`
 
 \---
 

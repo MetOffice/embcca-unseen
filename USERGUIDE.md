@@ -231,19 +231,12 @@ array back, rebuild it from the NaNs:
 corrected = np.ma.masked_invalid(bias_adjust_unseen(mod, obs))
 ```
 
-There is no skipping: E.g., a fully masked ocean cell still costs the same time as a
+There is no skipping: e.g. a fully masked ocean cell still costs the same time as an
 unmasked land cell, it just produces nothing. If you are adjusting a large domain that
 is mostly missing, consider subsetting to the valid cells first.
 
 `eps` guards against a variable with no variance across time, which would
-otherwise divide by zero. It floors standard deviations and eigenvalues alike,
-identically in all six functions.
-
-A constant variable therefore stays finite rather than producing NaN, and
-comes back at the observed mean. That matters because the variables are
-adjusted jointly: without the floor, one constant variable divides by zero and
-takes the whole block with it, including variables that were perfectly well
-behaved.
+otherwise divide by zero.
 
 ## Numerical notes
 
@@ -264,7 +257,7 @@ on a given machine and NumPy build.
 
 ## Performance
 
-Cost is linear in the number of `(cell, member)` blocks.
+Computational cost scales linearly with the number of `(cell, member)` blocks.
 
 ## Worked example
 
