@@ -7,14 +7,14 @@ The two analyses from:
 > *A new fast multivariate bias correction technique: a case study for compound
 > events in Hunan Province, China, using the UNSEEN approach*
 
-| File | Purpose |
-|---|---|
-| `Multi-DePreSys4-Paper-area_avg_final_multiscatter.py` | Hunan Province area-mean analysis used for the main manuscript results. |
-| `Multi-DePreSys4-Paper-area_full_final_China.py` | China-wide spatial analysis used for correlation-map and computational-cost comparisons. |
-| `prepare_depresys4_data_for_EMBCCA-UNSEEN.py` | Extracts seasonal DePreSys4 temperature or precipitation from CMIP6 DCPP archives and writes manuscript-ready NetCDF files. |
-| `prepare_era5-land_data_for_EMBCCA-UNSEEN.py` | Extracts seasonal ERA5-Land temperature or precipitation and writes manuscript-ready NetCDF files. |
-| `regrid_obs_to_depresys_grid.py` | Regrids ERA5-Land observations onto the DePreSys4 grid for gridded China analyses. |
-| `fidelity_test_cube.py` | Helper module for UNSEEN-style fidelity testing, imported by the analysis scripts. |
+| File | Purpose                                                                                                                                                   |
+|---|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Multi-DePreSys4-Paper-area_avg_final_multiscatter.py` | Hunan Province area-mean analysis used for the main manuscript results.                                                                                   |
+| `Multi-DePreSys4-Paper-area_full_final_China.py` | China-wide spatial analysis used for correlation-map and computational-cost comparisons.                                                                  |
+| `prepare_depresys4_data_for_EMBCCA-UNSEEN.py` | Extracts seasonal DePreSys4 temperature or precipitation from CMIP6 DCPP archives and writes NetCDF files which are used by the first two scripts listed. |
+| `prepare_era5-land_data_for_EMBCCA-UNSEEN.py` | Extracts seasonal ERA5-Land temperature or precipitation and writes NetCDF files which are used by the first two scripts listed.                          |
+| `regrid_obs_to_depresys_grid.py` | Regrids ERA5-Land observations onto the DePreSys4 grid for gridded China analyses.                                                                        |
+| `fidelity_test_cube.py` | Statistical fidelity test module (an established part of UNSEEN analysis), used by the first two scripts listed.                                          |
 
 The preprocessing scripts listed above can be used to regenerate the manuscript input datasets from the publicly available source data.
 
