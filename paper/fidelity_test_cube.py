@@ -1,6 +1,6 @@
 # (C) Crown Copyright, Met Office. All rights reserved.
 # This file is released under the BSD 3-Clause license.
-# See LICENCE.txt in the root of the repository for full licensing details.
+# See LICENCE in the root of the repository for full licensing details.
 
 import numpy as np
 import scipy.stats as stats

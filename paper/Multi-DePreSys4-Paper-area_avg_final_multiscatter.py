@@ -1,6 +1,6 @@
 # (C) Crown Copyright, Met Office. All rights reserved.
 # This file is released under the BSD 3-Clause license.
-# See LICENCE.txt in the root of the repository for full licensing details.
+# See LICENCE in the root of the repository for full licensing details.
 
 import netCDF4 as nc
 import numpy as np
@@ -13,8 +13,8 @@ import matplotlib as mpl
 # USER SETTINGS (edit these to run the workflow)
 # =============================================================================
 
-DATA_DIR = "/path/to/data"          # directory containing input NetCDF files
-OUTDIR   = "/path/to/output"        # directory where figures will be saved
+DATA_DIR = "/path/to/data_inputs"          # directory containing input NetCDF files
+OUTDIR   = "/path/to/outputs"        # directory where figures will be saved
 SEED     = 42                       # reproducibility seed
 
 START_YEAR    = 1992
@@ -51,6 +51,9 @@ DATA_PATH = Path(DATA_DIR)
 # --- SBCK imports (REMOVED MBCn) ---
 from SBCK import QDM, CDFt, R2D2, dOTC, MRec
 
+# EMBCCA bias adjustment (pip install embcca-unseen)
+import embcca
+
 # import functions
 from fidelity_test_cube import FidelityTestCube
 ftc = FidelityTestCube()
@@ -58,7 +61,6 @@ ftc = FidelityTestCube()
 outdir = OUTDIR
 seed = SEED
 # load model data
-dir = DATA_DIR  # input data directory
 tas_model_nc = nc.Dataset(str(DATA_PATH / TAS_MODEL_FILE), mode='r')
 pr_model_nc = nc.Dataset(str(DATA_PATH / PR_MODEL_FILE), mode='r')
 tas_obs_nc = nc.Dataset(str(DATA_PATH / TAS_OBS_FILE), mode='r')
@@ -370,34 +372,7 @@ def plot_scatter_sixpanel(obs_combined, mod_raw, meancor_combined,
 
 ## Bias Correction: Yiweh's method ##
 # correct mean and correlation, preserve the variance
-def multi_correction_eigen_per_ensemble(mod, obs):
-    n_years, n_ensembles, n_vars = mod.shape
-    mod_corrected = np.empty_like(mod)
-    obs_mean = np.mean(obs, axis=0)
-    obs_std = np.std(obs, axis=0)
-    obs_st = (obs - obs_mean) / obs_std
-    Covariance_obs = np.cov(obs_st, rowvar=False)
-    eigenvalues_obs, W = np.linalg.eigh(Covariance_obs)
-    eigenvalues_obs = np.maximum(eigenvalues_obs, 1e-6)
-
-    for i in range(n_ensembles):
-        mod_mean = np.mean(mod[:, i, :], axis=0)
-        mod_std = np.std(mod[:, i, :], axis=0)
-        mod_st = (mod[:, i, :] - mod_mean) / mod_std
-        Covariance_mod = np.cov(mod_st, rowvar=False)
-        eigenvalues_mod, V = np.linalg.eigh(Covariance_mod)
-        eigenvalues_mod = np.maximum(eigenvalues_mod, 1e-6)
-        Gamma_inv_sqrt = np.diag(1.0 / np.sqrt(eigenvalues_mod))
-        Lambda_sqrt = np.diag(np.sqrt(eigenvalues_obs))
-
-        Zm = np.einsum('ij,jk->ik', mod_st, V)                 # mod_st * V
-        Zm = np.einsum('ik,kl->il', Zm, Gamma_inv_sqrt)        # * Gamma^-1/2
-        Zm = np.einsum('il,lm->im', Zm, Lambda_sqrt)           # * Lambda^1/2
-        Zm = np.einsum('im,mn->in', Zm, W.T)                   # * W^T
-        mod_corrected[:, i, :] = Zm * mod_std + obs_mean
-    return mod_corrected
-
-mod_corrected_eigen = multi_correction_eigen_per_ensemble(mod_raw, obs_combined)
+mod_corrected_eigen = embcca.bias_adjust_unseen(mod_raw, obs_combined, vectorised=False)
 
 
 ## Comparison with other multivariate bias-adjustment methods using SBCK tool ##
@@ -425,7 +400,7 @@ def apply_sbck_to_ensemble(obs, model_ensemble, bc_type, idx_train, idx_test):
     corrected = np.empty_like(X_test)
 
     if bc_type == 'EMBCCA-UNSEEN':
-        corrected = multi_correction_eigen_per_ensemble(X_test, obs)
+        corrected = embcca.bias_adjust_unseen(X_test, obs, vectorised=False)
     else:
         for i in range(n_ensembles):
             Y0 = np.asarray(obs)
@@ -648,7 +623,7 @@ def plot_single_variable_comparison(
     plt.tight_layout()
 
     key_for_fname = 'Standard_Deviation' if statistic_key == 'Standard Deviation' else statistic_key.replace(" ", "_")
-    fname = Path(f'{outdir}Statistical_Comparison/{variable_name}_{key_for_fname}.png')
+    fname = Path(f'{outdir}/Statistical_Comparison/{variable_name}_{key_for_fname}.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)
@@ -749,7 +724,7 @@ def plot_corr_skew_kurtosis_comparison(
 
     plt.tight_layout()
 
-    fname = Path(f'{outdir}Statistical_Comparison/{statistic_key}.png')
+    fname = Path(f'{outdir}/Statistical_Comparison/{statistic_key}.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)
@@ -977,7 +952,7 @@ def plot_comparison(obs, mod_corrected_sbck_list, bc_method_names):
     ]
     fig.legend(handles=custom_lines, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 0.95))
 
-    fname = Path(f'{outdir}Exceedance_Comparison/exceedance_comparison.png')
+    fname = Path(f'{outdir}/Exceedance_Comparison/exceedance_comparison.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)
@@ -1076,7 +1051,7 @@ def calculate_and_compare_probabilities(obs, mod_corrected_sbck_list, bc_method_
 
     plt.tight_layout()
 
-    fname = Path(f'{outdir}Exceedance_Comparison/exceedance_comparison_bar.png')
+    fname = Path(f'{outdir}/Exceedance_Comparison/exceedance_comparison_bar.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname, dpi=200)
@@ -1168,7 +1143,7 @@ def calculate_and_compare_joint_probabilities(obs, mod_corrected_sbck_list, bc_m
 
     plt.tight_layout()
 
-    fname = Path(f'{outdir}Exceedance_Comparison/joint_exceedance_comparison_bar.png')
+    fname = Path(f'{outdir}/Exceedance_Comparison/joint_exceedance_comparison_bar.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname, dpi=200)
@@ -1223,7 +1198,7 @@ for k in range(plotted, nrows * ncols):
     axes[r, c].axis("off")
 
 plt.tight_layout()
-fname = Path(f'{outdir}Exceedance_Comparison/joint_exceedance_by_precipitation_decrement.png')
+fname = Path(f'{outdir}/Exceedance_Comparison/joint_exceedance_by_precipitation_decrement.png')
 fname.parent.mkdir(parents=True, exist_ok=True)
 print(f'Saving {fname}')
 plt.savefig(fname)
@@ -1275,7 +1250,7 @@ for k in range(plotted, nrows * ncols):
     axes[r, c].axis("off")
 
 plt.tight_layout()
-fname = Path(f'{outdir}Exceedance_Comparison/joint_exceedance_by_temperature_increment.png')
+fname = Path(f'{outdir}/Exceedance_Comparison/joint_exceedance_by_temperature_increment.png')
 fname.parent.mkdir(parents=True, exist_ok=True)
 print(f'Saving {fname}')
 plt.savefig(fname)
@@ -1289,7 +1264,7 @@ for i, mod in enumerate(fid_model_list):
     # Temperature
     stats_measures_temp = ftc.timeseries_fid_test(obs_combined[:, 1], mod[:, :, 1], seed=seed)
     ftc.plot_fidelity_testing(obs_combined[:, 1], mod[:, :, 1], stats_measures_temp, 0.1, "", "1.png")
-    fname = Path(f'{outdir}Fidelity_Testing/{fid_method_names[i]}_temperature.png')
+    fname = Path(f'{outdir}/Fidelity_Testing/{fid_method_names[i]}_temperature.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)
@@ -1298,7 +1273,7 @@ for i, mod in enumerate(fid_model_list):
     # Precipitation
     stats_measures_pr = ftc.timeseries_fid_test(obs_combined[:, 0], mod[:, :, 0], seed=seed)
     ftc.plot_fidelity_testing(obs_combined[:, 0], mod[:, :, 0], stats_measures_pr, 0.1, "", "1.png")
-    fname = Path(f'{outdir}Fidelity_Testing/{fid_method_names[i]}_precipitation.png')
+    fname = Path(f'{outdir}/Fidelity_Testing/{fid_method_names[i]}_precipitation.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)

@@ -1,3 +1,7 @@
+# (C) Crown Copyright, Met Office. All rights reserved.
+# This file is released under the BSD 3-Clause license.
+# See LICENCE in the root of the repository for full licensing details.
+
 '''
 Extract seasonal temperature or precipitation for specified country from DePreSys4
 data that has been downloaded from the CEDA archive. The output is a single netCDF file with the seasonal
@@ -26,16 +30,24 @@ iris.FUTURE.date_microseconds = True
 warnings.filterwarnings("ignore", message=r"Missing CF-netCDF measure variable 'areacella'.*",
                         module=r"iris\.fileformats\.cf")
 
+# =============================================================================
+# USER SETTINGS (edit these to run the workflow)
+# =============================================================================
 
 PROVINCE = "China"
 VARNAME = "tas"  # "tas" or "pr"
-YEARS = [1961, 1963]
-# YEARS = [1992, 2023]
+YEARS = [1992, 2023]
 SEASON = "jja"  # e.g. "djf", "mam", "jjas", or [6, 7, 8]
 
-SHAPEFILE = "/data/users/appldata/Data/Spatial_data/Natural_Earth/v5.0.1/ne_10m_admin_0_countries.shp"
-OUT_DIR = "/data/users/cst/Projects/CSSP/CSSP_China/FY2526/Yiwei_paper/data"
-RAW_DATA_DIR = "/data/users/managecmip/champ/CMIP6"
+SHAPEFILE = "/path/to/shapefile/ne_10m_admin_0_countries.shp"
+OUT_DIR = "/path/to/output"
+# Root of a CMIP6 archive organised using the standard CMIP6 DRS.
+# The expected paths below this directory begin:
+# DCPP/<institution>/<source>/dcppA-hindcast/...
+# DCPP/<institution>/<source>/dcppB-forecast/...
+RAW_DATA_DIR = "/path/to/CMIP6"
+
+# Modify these if using another institution or model.
 INSTITUTION_ID = "MOHC"
 SOURCE_ID = "HadGEM3-GC31-MM"
 
@@ -47,6 +59,11 @@ SEASON_MONTHS = {"djf": [12, 1, 2],
                  "mam": [3, 4, 5],
                  "jja": [6, 7, 8],
                  "son": [9, 10, 11]}
+
+SEASON_NAMES = {"djf": "winter",
+                "mam": "spring",
+                "jja": "summer",
+                "son": "autumn",}
 
 MONTH_LENGTHS = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
                  7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31}
@@ -116,6 +133,12 @@ def _get_raw_data_filenames(varname: str) -> list[str]:
     -------
     patterns : list[str]
         Glob patterns for both hindcast and forecast experiment folders.
+
+    Notes
+    -----
+    The file search assumes a standard CMIP6 DRS directory structure.
+    Users whose data are stored differently should modify the glob
+    patterns in this function.
     '''
     if varname not in {"tas", "pr"}:
         raise ValueError(f"Unsupported varname: {varname!r}. Use 'tas' or 'pr'.")
@@ -492,6 +515,7 @@ def run() -> None:
         raise ValueError("No model cubes were loaded after filtering.")
 
     _, season_label = _parse_season(SEASON)
+    filename_season = SEASON_NAMES.get(season_label, season_label)
 
     season_cubelist = iris.cube.CubeList()
     output_long_name = None
@@ -515,7 +539,7 @@ def run() -> None:
     print(output_cube.data.max())
     print(output_cube.data.min())
 
-    iris.save(output_cube, f"{OUT_DIR}/{PROVINCE}_{YEARS[0]}_{YEARS[-1]}_{season_label}_{VARNAME}_model_DePreSys4.nc")
+    iris.save(output_cube, f"{OUT_DIR}/{PROVINCE}_{YEARS[0]}_{YEARS[-1]}_{filename_season}_{VARNAME}_model_DePreSys4.nc")
 
 
 if __name__ == "__main__":

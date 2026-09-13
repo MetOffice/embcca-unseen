@@ -17,6 +17,8 @@ authors:
     given-names: "Jemma C. S."
   - family-names: "Crocker"
     given-names: "Thomas"
+  - family-names: "Bradshaw"
+    given-names: "Laurence"
 date-released: "2026-07-01"
 license: "BSD-3-Clause"
 repository-code: "https://github.com/MetOffice/embcca-unseen"

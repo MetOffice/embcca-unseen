@@ -1,6 +1,6 @@
 # (C) Crown Copyright, Met Office. All rights reserved.
 # This file is released under the BSD 3-Clause license.
-# See LICENCE.txt in the root of the repository for full licensing details.
+# See LICENCE in the root of the repository for full licensing details.
 
 import netCDF4 as nc
 import numpy as np
@@ -13,8 +13,8 @@ import matplotlib as mpl
 # USER SETTINGS (edit these to run the workflow)
 # =============================================================================
 
-DATA_DIR = "/path/to/data"          # directory containing input NetCDF files
-OUTDIR   = "/path/to/output/China"  # directory where figures will be saved
+DATA_DIR = "/path/to/data_inputs"          # directory containing input NetCDF files
+OUTDIR   = "/path/to/outputs"        # directory where figures will be saved
 SEED     = 42                       # reproducibility seed
 
 START_YEAR    = 1992
@@ -60,6 +60,9 @@ import iris
 import time
 from SBCK import QDM, CDFt, R2D2, dOTC, MRec
 
+# EMBCCA bias adjustment (pip install embcca-unseen)
+import embcca
+
 # import functions
 from fidelity_test_cube import FidelityTestCube
 ftc = FidelityTestCube()
@@ -70,7 +73,6 @@ def _get_extent(template_cube):
     lons = template_cube.coord("longitude").points
     return [float(np.min(lons)), float(np.max(lons)), float(np.min(lats)), float(np.max(lats))]
 
-dir = '/data/users/cst/Projects/CSSP/CSSP_China/FY2526/Yiwei_paper/data/'
 cube = iris.load_cube(str(DATA_PATH / TAS_OBS_FILE))
 lats = cube.coord('latitude').points
 lons = cube.coord('longitude').points
@@ -81,10 +83,10 @@ pr_model_nc = nc.Dataset(str(DATA_PATH / PR_MODEL_FILE), mode='r')
 tas_obs_nc = nc.Dataset(str(DATA_PATH / TAS_OBS_FILE), mode='r')
 pr_obs_nc = nc.Dataset(str(DATA_PATH / PR_OBS_FILE), mode='r')
 
-tas_model = tas_model_nc.variables['mean_jja_temperature'][:]
-pr_model = pr_model_nc.variables['total_jja_precipitation'][:]
-tas_obs = tas_obs_nc.variables['t2m'][:]
-pr_obs = pr_obs_nc.variables['tp'][:]
+tas_model = tas_model_nc.variables[TAS_MODEL_VAR][:]
+pr_model = pr_model_nc.variables[PR_MODEL_VAR][:]
+tas_obs = tas_obs_nc.variables[TAS_OBS_VAR][:]
+pr_obs = pr_obs_nc.variables[PR_OBS_VAR][:]
 
 # # average over lat and lon for model data
 # tas_model = tas_model.mean(axis=(-2,-1))
@@ -137,89 +139,12 @@ mod_raw = np.ma.array(mod_raw, mask=mask5d, copy=False)
 ## Bias Correction: Yiweh's method ##
 # correct mean and correlation, preserve the variance
 
-def multi_correction_eigen_per_ensemble(mod, obs, eps=1e-6):
-    """
-    Eigen-based multivariate correction per ensemble member, applied independently
-    at each (lon, lat) grid cell.
-
-    Parameters
-    ----------
-    mod : array, shape (n_years, n_ensembles, n_lons, n_lats, n_vars)
-    obs : array, shape (n_years, n_lons, n_lats, n_vars)
-    eps : float
-        Small number to avoid divide-by-zero and negative/zero eigenvalues.
-
-    Returns
-    -------
-    mod_corrected : array, same shape as mod
-    """
-
-    n_years, n_ensembles, n_lons, n_lats, n_vars = mod.shape
-    mod_corrected = np.empty_like(mod)
-
-    # Loop over grid
-    for ilon in range(n_lons):
-        for ilat in range(n_lats):
-
-            # --- OBS at this grid cell: (time, vars) ---
-            obs_cell = obs[:, ilon, ilat, :]  # shape (n_years, n_vars)
-
-            # mean/std over time for each variable
-            obs_mean = np.mean(obs_cell, axis=0)
-            obs_std  = np.std(obs_cell, axis=0)
-
-            # avoid divide-by-zero
-            obs_std = np.where(obs_std < eps, eps, obs_std)
-
-            # standardise
-            obs_st = (obs_cell - obs_mean) / obs_std
-
-            # covariance across variables (vars x vars)
-            Cov_obs = np.cov(obs_st, rowvar=False)
-
-            # eigen-decomp
-            eigenvalues_obs, W = np.linalg.eigh(Cov_obs)
-            eigenvalues_obs = np.maximum(eigenvalues_obs, eps)
-            Lambda_sqrt = np.diag(np.sqrt(eigenvalues_obs))
-
-            # Loop over ensembles for this grid cell
-            for ens in range(n_ensembles):
-
-                # --- MOD at this grid cell and ensemble: (time, vars) ---
-                mod_cell = mod[:, ens, ilon, ilat, :]  # (n_years, n_vars)
-
-                mod_mean = np.mean(mod_cell, axis=0)
-                mod_std  = np.std(mod_cell, axis=0)
-                mod_std  = np.where(mod_std < eps, eps, mod_std)
-
-                mod_st = (mod_cell - mod_mean) / mod_std
-
-                Cov_mod = np.cov(mod_st, rowvar=False)
-
-                eigenvalues_mod, V = np.linalg.eigh(Cov_mod)
-                eigenvalues_mod = np.maximum(eigenvalues_mod, eps)
-                Gamma_inv_sqrt = np.diag(1.0 / np.sqrt(eigenvalues_mod))
-
-                # Whitening + recoloring:
-                # Zm = mod_st @ V @ Gamma^-1/2 @ Lambda^1/2 @ W.T
-                Zm = mod_st.data @ V
-                Zm = Zm @ Gamma_inv_sqrt
-                Zm = Zm @ Lambda_sqrt
-                Zm = Zm @ W.T
-
-                # Back to observed scale (note: your original uses obs_mean + mod_std scaling)
-                mod_corrected[:, ens, ilon, ilat, :] = Zm * mod_std + obs_mean
-
-    return mod_corrected
-
-# mod_corrected_eigen = multi_correction_eigen_per_ensemble(mod_raw, obs_combined)
+# mod_corrected_eigen = embcca.bias_adjust_unseen(mod_raw, obs_combined, vectorised=False)
 
 ## Comparison with other multivariate bias-adjustment methods using SBCK tool ##
 
 def get_bc_handler(bc_type):
-    if bc_type == 'MBCn':
-        return MBCn()
-    elif bc_type == 'R2D2':
+    if bc_type == 'R2D2':
         return R2D2()
     elif bc_type == 'dOTC':
         return dOTC()
@@ -273,11 +198,10 @@ def apply_sbck_to_ensemble(obs, model_ensemble, bc_type, seed=42, eps=1e-6):
     X_train = model_ensemble[:, idx, ...]
     X_test  = model_ensemble[:, idx_comp, ...]
 
-    # ---- If EMBCCA-UNSEEN: use your eigen method (already works for spatial) ----
+    # ---- EMBCCA-UNSEEN: expects (T,E,lon,lat,V) and obs (T,lon,lat,V),
+    # ---- and returns the same shape as X_test ----
     if bc_type == 'EMBCCA-UNSEEN':
-        # Your multi_correction_eigen_per_ensemble expects (T,E,lon,lat,V) and obs (T,lon,lat,V)
-        # and returns same shape as X_test
-        return multi_correction_eigen_per_ensemble(X_test, obs)
+        return embcca.bias_adjust_unseen(X_test, obs, vectorised=False)
 
     SBCK = get_bc_handler(bc_type)
     if SBCK is None:
@@ -363,7 +287,7 @@ for k, v in timings.items():
     print(f"{k:10s}: {v:8.2f} s")
 
 # Averaging across time and ensemble member (for models) for plotting of maps further below
-for bc_method_name in bc_method_names:
+for mod_corrected_sbck in mod_corrected_sbck_list:
     mod_corrected_sbck_time_avg = mod_corrected_sbck.mean(axis=0)
     mod_corrected_sbck_time_avg_ensemble_mean = mod_corrected_sbck_time_avg.mean(axis=0)
     mod_corrected_sbck_list_mean.append(mod_corrected_sbck_time_avg_ensemble_mean)
@@ -520,7 +444,7 @@ def plot_mean_map(obs, mod_raw, mod_sbck_list, var_name, lats, lons):
     cbar.set_label(cbar_label)
     fig.suptitle(f"{title}", fontsize=18, y=1.02)
 
-    fname = Path(f"{outdir}Maps/{var_name}.png")
+    fname = Path(f"{outdir}/Maps/{var_name}.png")
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f"Saving {fname}")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
@@ -634,7 +558,7 @@ def plot_corr_map(obs, mod_raw, mod_sbck_list, lats, lons):
     cbar.set_label(cbar_label)
     fig.suptitle(title, fontsize=18, y=1.02)
 
-    fname = Path(f"{outdir}Maps/correlation.png")
+    fname = Path(f"{outdir}/Maps/correlation.png")
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f"Saving {fname}")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
@@ -727,7 +651,7 @@ def plot_corr_diff_map(obs, mod_raw, mod_sbck_list, lats, lons):
     cbar.set_label(cbar_label)
     fig.suptitle(title, fontsize=18, y=1.02)
 
-    fname = Path(f"{outdir}Maps/correlation_diff.png")
+    fname = Path(f"{outdir}/Maps/correlation_diff.png")
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f"Saving {fname}")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
