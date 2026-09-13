@@ -1,6 +1,6 @@
 # (C) Crown Copyright, Met Office. All rights reserved.
 # This file is released under the BSD 3-Clause license.
-# See LICENCE.txt in the root of the repository for full licensing details.
+# See LICENCE in the root of the repository for full licensing details.
 
 import netCDF4 as nc
 import numpy as np
@@ -13,8 +13,8 @@ import matplotlib as mpl
 # USER SETTINGS (edit these to run the workflow)
 # =============================================================================
 
-DATA_DIR = "/path/to/data"          # directory containing input NetCDF files
-OUTDIR   = "/path/to/output/China"  # directory where figures will be saved
+DATA_DIR = "/path/to/data_inputs"          # directory containing input NetCDF files
+OUTDIR   = "/path/to/outputs"        # directory where figures will be saved
 SEED     = 42                       # reproducibility seed
 
 START_YEAR    = 1992
@@ -73,7 +73,6 @@ def _get_extent(template_cube):
     lons = template_cube.coord("longitude").points
     return [float(np.min(lons)), float(np.max(lons)), float(np.min(lats)), float(np.max(lats))]
 
-dir = '/data/users/cst/Projects/CSSP/CSSP_China/FY2526/Yiwei_paper/data/'
 cube = iris.load_cube(str(DATA_PATH / TAS_OBS_FILE))
 lats = cube.coord('latitude').points
 lons = cube.coord('longitude').points
@@ -84,10 +83,10 @@ pr_model_nc = nc.Dataset(str(DATA_PATH / PR_MODEL_FILE), mode='r')
 tas_obs_nc = nc.Dataset(str(DATA_PATH / TAS_OBS_FILE), mode='r')
 pr_obs_nc = nc.Dataset(str(DATA_PATH / PR_OBS_FILE), mode='r')
 
-tas_model = tas_model_nc.variables['mean_jja_temperature'][:]
-pr_model = pr_model_nc.variables['total_jja_precipitation'][:]
-tas_obs = tas_obs_nc.variables['t2m'][:]
-pr_obs = pr_obs_nc.variables['tp'][:]
+tas_model = tas_model_nc.variables[TAS_MODEL_VAR][:]
+pr_model = pr_model_nc.variables[PR_MODEL_VAR][:]
+tas_obs = tas_obs_nc.variables[TAS_OBS_VAR][:]
+pr_obs = pr_obs_nc.variables[PR_OBS_VAR][:]
 
 # # average over lat and lon for model data
 # tas_model = tas_model.mean(axis=(-2,-1))
@@ -145,9 +144,7 @@ mod_raw = np.ma.array(mod_raw, mask=mask5d, copy=False)
 ## Comparison with other multivariate bias-adjustment methods using SBCK tool ##
 
 def get_bc_handler(bc_type):
-    if bc_type == 'MBCn':
-        return MBCn()
-    elif bc_type == 'R2D2':
+    if bc_type == 'R2D2':
         return R2D2()
     elif bc_type == 'dOTC':
         return dOTC()
@@ -447,7 +444,7 @@ def plot_mean_map(obs, mod_raw, mod_sbck_list, var_name, lats, lons):
     cbar.set_label(cbar_label)
     fig.suptitle(f"{title}", fontsize=18, y=1.02)
 
-    fname = Path(f"{outdir}Maps/{var_name}.png")
+    fname = Path(f"{outdir}/Maps/{var_name}.png")
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f"Saving {fname}")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
@@ -561,7 +558,7 @@ def plot_corr_map(obs, mod_raw, mod_sbck_list, lats, lons):
     cbar.set_label(cbar_label)
     fig.suptitle(title, fontsize=18, y=1.02)
 
-    fname = Path(f"{outdir}Maps/correlation.png")
+    fname = Path(f"{outdir}/Maps/correlation.png")
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f"Saving {fname}")
     plt.savefig(fname, dpi=300, bbox_inches="tight")
@@ -654,7 +651,7 @@ def plot_corr_diff_map(obs, mod_raw, mod_sbck_list, lats, lons):
     cbar.set_label(cbar_label)
     fig.suptitle(title, fontsize=18, y=1.02)
 
-    fname = Path(f"{outdir}Maps/correlation_diff.png")
+    fname = Path(f"{outdir}/Maps/correlation_diff.png")
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f"Saving {fname}")
     plt.savefig(fname, dpi=300, bbox_inches="tight")

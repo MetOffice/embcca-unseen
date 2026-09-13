@@ -1,5 +1,5 @@
 (C) Crown Copyright, Met Office. All rights reserved.
-See LICENCE.txt in the root of the repository for full licensing details.
+See LICENCE in the root of the repository for full licensing details.
 # EMBCCA
 # A new fast multivariate bias correction technique: a case study for compound events in Hunan Province, China, using the UNSEEN approach
 

@@ -1,5 +1,5 @@
 (C) Crown Copyright, Met Office. All rights reserved.
-See LICENCE.txt in the root of the repository for full licensing details.
+See LICENCE in the root of the repository for full licensing details.
 # Manuscript analyses
 
 The two analyses from:

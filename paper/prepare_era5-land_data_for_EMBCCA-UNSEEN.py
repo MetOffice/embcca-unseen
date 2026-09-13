@@ -1,3 +1,7 @@
+# (C) Crown Copyright, Met Office. All rights reserved.
+# This file is released under the BSD 3-Clause license.
+# See LICENCE in the root of the repository for full licensing details.
+
 """
 Extract seasonal temperature or precipitation for a specified country from ERA5-Land
 monthly data.
@@ -14,7 +18,6 @@ The output file is named according to the country, years, season, and variable n
 
 from __future__ import annotations
 
-import calendar
 import os
 import warnings
 
@@ -39,21 +42,32 @@ warnings.filterwarnings(
     module=r"iris\.fileformats\.cf",
 )
 
+# =============================================================================
+# USER SETTINGS (edit these to run the workflow)
+# =============================================================================
+
 PROVINCE = "China"
 VARNAME = "tas"  # "tas" or "pr"
 YEARS = [1992, 2023]
 SEASON = "jja"  # e.g. "djf", "mam", "jja", "son", or [6, 7, 8]
 
-SHAPEFILE = "/data/users/appldata/Data/Spatial_data/Natural_Earth/v5.0.1/ne_10m_admin_0_countries.shp"
-OUT_DIR = "/data/users/cst/Projects/CSSP/CSSP_China/FY2526/Yiwei_paper/data"
-ERA5_LAND_PATH = "/data/users/appldata/Data/OBS-ERA5-Land/"
+SHAPEFILE = "/path/to/shapefile/ne_10m_admin_0_countries.shp"
+OUT_DIR = "/path/to/output"
+ERA5_LAND_PATH = "/path/to/input/OBS-ERA5-Land"
 
 MINIMUM_WEIGHT = 0.5
+LAT_RANGE = (15, 55)
+LON_RANGE = (70, 140)
 
 SEASON_MONTHS = {"djf": [12, 1, 2],
                  "mam": [3, 4, 5],
                  "jja": [6, 7, 8],
                  "son": [9, 10, 11],}
+
+SEASON_NAMES = {"djf": "winter",
+                "mam": "spring",
+                "jja": "summer",
+                "son": "autumn",}
 
 MONTH_LENGTHS = {1: 31, 2: 28, 3: 31, 4: 30, 5: 31, 6: 30,
                  7: 31, 8: 31, 9: 30, 10: 31, 11: 30, 12: 31,}
@@ -236,7 +250,12 @@ def _load_month_cube(varname: str, year: int, month: int, region_shape) -> iris.
     if not os.path.exists(month_fname):
         raise FileNotFoundError(f"ERA5-Land file not found: {month_fname}")
 
-    cube = iris.load_cube(month_fname)
+    lat_constraint = iris.Constraint(latitude=lambda cell: LAT_RANGE[0] < cell < LAT_RANGE[1])
+
+    lon_constraint = iris.Constraint(longitude=lambda cell: LON_RANGE[0] < cell < LON_RANGE[1])
+
+    cube = iris.load_cube(month_fname, lat_constraint & lon_constraint)
+
     cube = _add_year_dim(cube)
     cube = _add_month_num_dim(cube)
     cube = _add_season_year_dim(cube)
@@ -248,8 +267,7 @@ def _load_month_cube(varname: str, year: int, month: int, region_shape) -> iris.
         cube.units = "celsius"
         cube.long_name = "mean_season_temperature"
     elif varname == "pr":
-        num_days = MONTH_LENGTHS[month]
-        cube.data = (cube.data * num_days) * 1000.0
+        cube.data = cube.data * 1000.0
         cube.units = "mm"
         cube.long_name = "total_season_precipitation"
 
@@ -282,32 +300,28 @@ def _season_cube(cube: iris.cube.Cube, varname: str,
         available_months = sorted({int(value) for value in cube.coord("month_number").points.tolist()})
         raise ValueError(f"No data found for season {season_label!r} (months={months}) in cube. Available months are {available_months}.")
 
-    season_years = seasonal.coord("season_year").points.astype(int)
     season_months = seasonal.coord("month_number").points.astype(int)
 
-    complete_years = [int(year) for year in np.unique(season_years) if set(season_months[season_years == year]) == set(months)]
-    seasonal = seasonal.extract(iris.Constraint(season_year=lambda cell: int(getattr(cell, "point", cell)) in complete_years))
-
-    if seasonal is None:
-        raise ValueError(f"No complete {season_label!r} seasons found in cube.")
+    if set(season_months) != set(months):
+        raise ValueError(
+            f"No complete {season_label!r} season found. "
+            f"Expected months {months}, found {season_months.tolist()}."
+        )
 
     if varname == "tas":
-        seasonal = seasonal.copy()
-        seasonal.data = seasonal.data - 273.15
-        out = seasonal.aggregated_by("season_year", iris.analysis.MEAN)
+        out = seasonal.collapsed("time", iris.analysis.MEAN)
         out.units = "celsius"
         return out, f"mean_{season_label}_temperature"
 
-    if varname == "pr":
-        seasonal = seasonal.copy()
-        for month in months:
-            month_mask = seasonal.coord("month_number").points == month
-            seasonal.data[month_mask, ...] = seasonal.data[month_mask, ...] * MONTH_LENGTHS[month]
-        out = seasonal.aggregated_by("season_year", iris.analysis.SUM)
+    elif varname == "pr":
+        out = seasonal.collapsed("time", iris.analysis.SUM)
         out.units = "mm"
         return out, f"total_{season_label}_precipitation"
 
-    raise ValueError(f"Unsupported varname: {varname!r}. Use 'tas' or 'pr'.")
+    else:
+        raise ValueError(
+            f"Unsupported varname: {varname!r}. Use 'tas' or 'pr'."
+        )
 
 
 def _build_output_cube(season_cubelist: iris.cube.CubeList, long_name: str) -> iris.cube.Cube:
@@ -356,6 +370,7 @@ def _build_output_cube(season_cubelist: iris.cube.CubeList, long_name: str) -> i
 def run() -> None:
     region_shape = _load_region_shape(PROVINCE)
     months, season_label = _parse_season(SEASON)
+    filename_season = SEASON_NAMES.get(season_label, season_label)
 
     os.makedirs(OUT_DIR, exist_ok=True)
     year_dir = os.path.join(OUT_DIR, "individual_years")
@@ -367,7 +382,7 @@ def run() -> None:
 
     for season_year in range(YEARS[0], YEARS[-1] + 1):
         print(f"Processing season year {season_year}...")
-        annual_fname = f"{year_dir}/{PROVINCE}_{season_year}_{season_label}_{VARNAME}_obs_ERA5_Land.nc"
+        annual_fname = f"{year_dir}/{PROVINCE}_{season_year}_{filename_season}_{VARNAME}_obs_ERA5_Land.nc"
 
         if os.path.exists(annual_fname):
             season_cube_year = iris.load_cube(annual_fname)
@@ -418,7 +433,7 @@ def run() -> None:
     print(output_cube.data.max())
     print(output_cube.data.min())
 
-    out_fname = f"{OUT_DIR}/{PROVINCE}_{YEARS[0]}_{YEARS[-1]}_{season_label}_{VARNAME}_obs_ERA5_Land.nc"
+    out_fname = f"{OUT_DIR}/{PROVINCE}_{YEARS[0]}_{YEARS[-1]}_{filename_season}_{VARNAME}_obs_ERA5_Land.nc"
     iris.save(output_cube, out_fname)
     print(f"Wrote {out_fname}")
 

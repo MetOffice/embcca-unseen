@@ -22,6 +22,8 @@ dependencies:
   - pandas=3.0.5
   - cartopy=0.25.0
   - shapely=2.1.2
+  - rasterio=1.5.1
+  - affine=3.0.1
   - pyproj=3.7.2
   - geos=3.14.1
   - proj=9.7.1

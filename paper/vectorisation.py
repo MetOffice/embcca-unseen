@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # (C) Crown Copyright, Met Office. All rights reserved.
 # This file is released under the BSD 3-Clause license.
-# See LICENCE.txt in the root of the repository for full licensing details.
+# See LICENCE in the root of the repository for full licensing details.
 
 """How much faster EMBCCA becomes when the per-cell loops are vectorised.
 

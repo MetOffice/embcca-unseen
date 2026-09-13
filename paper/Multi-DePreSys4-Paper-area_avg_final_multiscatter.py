@@ -1,6 +1,6 @@
 # (C) Crown Copyright, Met Office. All rights reserved.
 # This file is released under the BSD 3-Clause license.
-# See LICENCE.txt in the root of the repository for full licensing details.
+# See LICENCE in the root of the repository for full licensing details.
 
 import netCDF4 as nc
 import numpy as np
@@ -13,8 +13,8 @@ import matplotlib as mpl
 # USER SETTINGS (edit these to run the workflow)
 # =============================================================================
 
-DATA_DIR = "/path/to/data"          # directory containing input NetCDF files
-OUTDIR   = "/path/to/output"        # directory where figures will be saved
+DATA_DIR = "/path/to/data_inputs"          # directory containing input NetCDF files
+OUTDIR   = "/path/to/outputs"        # directory where figures will be saved
 SEED     = 42                       # reproducibility seed
 
 START_YEAR    = 1992
@@ -61,7 +61,6 @@ ftc = FidelityTestCube()
 outdir = OUTDIR
 seed = SEED
 # load model data
-dir = DATA_DIR  # input data directory
 tas_model_nc = nc.Dataset(str(DATA_PATH / TAS_MODEL_FILE), mode='r')
 pr_model_nc = nc.Dataset(str(DATA_PATH / PR_MODEL_FILE), mode='r')
 tas_obs_nc = nc.Dataset(str(DATA_PATH / TAS_OBS_FILE), mode='r')
@@ -624,7 +623,7 @@ def plot_single_variable_comparison(
     plt.tight_layout()
 
     key_for_fname = 'Standard_Deviation' if statistic_key == 'Standard Deviation' else statistic_key.replace(" ", "_")
-    fname = Path(f'{outdir}Statistical_Comparison/{variable_name}_{key_for_fname}.png')
+    fname = Path(f'{outdir}/Statistical_Comparison/{variable_name}_{key_for_fname}.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)
@@ -725,7 +724,7 @@ def plot_corr_skew_kurtosis_comparison(
 
     plt.tight_layout()
 
-    fname = Path(f'{outdir}Statistical_Comparison/{statistic_key}.png')
+    fname = Path(f'{outdir}/Statistical_Comparison/{statistic_key}.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)
@@ -953,7 +952,7 @@ def plot_comparison(obs, mod_corrected_sbck_list, bc_method_names):
     ]
     fig.legend(handles=custom_lines, loc="upper center", ncol=3, bbox_to_anchor=(0.5, 0.95))
 
-    fname = Path(f'{outdir}Exceedance_Comparison/exceedance_comparison.png')
+    fname = Path(f'{outdir}/Exceedance_Comparison/exceedance_comparison.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)
@@ -1052,7 +1051,7 @@ def calculate_and_compare_probabilities(obs, mod_corrected_sbck_list, bc_method_
 
     plt.tight_layout()
 
-    fname = Path(f'{outdir}Exceedance_Comparison/exceedance_comparison_bar.png')
+    fname = Path(f'{outdir}/Exceedance_Comparison/exceedance_comparison_bar.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname, dpi=200)
@@ -1144,7 +1143,7 @@ def calculate_and_compare_joint_probabilities(obs, mod_corrected_sbck_list, bc_m
 
     plt.tight_layout()
 
-    fname = Path(f'{outdir}Exceedance_Comparison/joint_exceedance_comparison_bar.png')
+    fname = Path(f'{outdir}/Exceedance_Comparison/joint_exceedance_comparison_bar.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname, dpi=200)
@@ -1199,7 +1198,7 @@ for k in range(plotted, nrows * ncols):
     axes[r, c].axis("off")
 
 plt.tight_layout()
-fname = Path(f'{outdir}Exceedance_Comparison/joint_exceedance_by_precipitation_decrement.png')
+fname = Path(f'{outdir}/Exceedance_Comparison/joint_exceedance_by_precipitation_decrement.png')
 fname.parent.mkdir(parents=True, exist_ok=True)
 print(f'Saving {fname}')
 plt.savefig(fname)
@@ -1251,7 +1250,7 @@ for k in range(plotted, nrows * ncols):
     axes[r, c].axis("off")
 
 plt.tight_layout()
-fname = Path(f'{outdir}Exceedance_Comparison/joint_exceedance_by_temperature_increment.png')
+fname = Path(f'{outdir}/Exceedance_Comparison/joint_exceedance_by_temperature_increment.png')
 fname.parent.mkdir(parents=True, exist_ok=True)
 print(f'Saving {fname}')
 plt.savefig(fname)
@@ -1265,7 +1264,7 @@ for i, mod in enumerate(fid_model_list):
     # Temperature
     stats_measures_temp = ftc.timeseries_fid_test(obs_combined[:, 1], mod[:, :, 1], seed=seed)
     ftc.plot_fidelity_testing(obs_combined[:, 1], mod[:, :, 1], stats_measures_temp, 0.1, "", "1.png")
-    fname = Path(f'{outdir}Fidelity_Testing/{fid_method_names[i]}_temperature.png')
+    fname = Path(f'{outdir}/Fidelity_Testing/{fid_method_names[i]}_temperature.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)
@@ -1274,7 +1273,7 @@ for i, mod in enumerate(fid_model_list):
     # Precipitation
     stats_measures_pr = ftc.timeseries_fid_test(obs_combined[:, 0], mod[:, :, 0], seed=seed)
     ftc.plot_fidelity_testing(obs_combined[:, 0], mod[:, :, 0], stats_measures_pr, 0.1, "", "1.png")
-    fname = Path(f'{outdir}Fidelity_Testing/{fid_method_names[i]}_precipitation.png')
+    fname = Path(f'{outdir}/Fidelity_Testing/{fid_method_names[i]}_precipitation.png')
     fname.parent.mkdir(parents=True, exist_ok=True)
     print(f'Saving {fname}')
     plt.savefig(fname)
